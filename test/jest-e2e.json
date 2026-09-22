@@ -8,6 +8,7 @@
   },
   "moduleNameMapper": {
     "^(\\.{1,2}/.*)\\.js$": "$1",
-    "^generated/prisma/client$": "<rootDir>/../generated/prisma/client"
+    "^generated/prisma/client$": "<rootDir>/../generated/prisma/client",
+    "^common/(.*)$": "<rootDir>/../common/$1"
   }
 }
