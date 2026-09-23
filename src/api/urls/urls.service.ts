@@ -6,7 +6,7 @@ import {
 import { DbService } from '../../db/db.service';
 import type { UrlDetailsDto } from './dto/urls.dto';
 import type { urlsModel } from 'generated/prisma/models/urls';
-import { generateShortCode } from 'common/short-code-utils';
+import { generateShortCode } from '../../../common/short-code-utils';
 
 const MAX_GENERATION_ATTEMPTS = 5;
 @Injectable()
