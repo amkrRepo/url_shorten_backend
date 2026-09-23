@@ -2,7 +2,7 @@
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 
-const BASE_URL: string = __ENV.BASE_URL || 'http://localhost:3000';
+const BASE_URL: string = 'http://localhost:3000';
 
 export const options = {
   stages: [
