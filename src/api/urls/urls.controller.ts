@@ -29,6 +29,7 @@ export class UrlsController {
   }
 
   @Get('redirect')
+  @HttpCode(HttpStatus.PERMANENT_REDIRECT)
   async redirect(
     @Query('short_code') short_code: string,
     @Res() res: Response,

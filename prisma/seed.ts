@@ -10,14 +10,26 @@ const prisma = new PrismaClient({ adapter });
 
 const SEED_COUNT = Number(process.env.SEED_COUNT ?? 1_00000);
 const BATCH_SIZE = 1_000;
+const PAST_DAYS = 90;
+const PAST_MS = PAST_DAYS * 24 * 60 * 60 * 1000;
+
+function randomCreatedAt(): Date {
+  const now = Date.now();
+  return new Date(now - Math.floor(Math.random() * PAST_MS));
+}
 
 function buildBatch(batchIndex: number, size: number) {
-  const rows: { original_url: string; short_code: string }[] = [];
+  const rows: {
+    original_url: string;
+    short_code: string;
+    created_at: Date;
+  }[] = [];
   for (let i = 0; i < size; i++) {
     const globalIndex = batchIndex * BATCH_SIZE + i;
     rows.push({
       original_url: `https://example.com/dummy-resource/${globalIndex}`,
       short_code: generateShortCode(),
+      created_at: randomCreatedAt(),
     });
   }
   return rows;

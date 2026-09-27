@@ -93,7 +93,17 @@ export class UrlsService {
       );
     }
 
-    return url;
+    const updatedUrl = await this.dbService.urls.update({
+      where: { short_code },
+      data: {
+        visit_count: {
+          increment: 1,
+        },
+        last_accessed_at: new Date(),
+      },
+    });
+
+    return updatedUrl;
   }
 
   async deleteByShortCode(short_code: string): Promise<void> {

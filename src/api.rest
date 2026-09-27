@@ -1,4 +1,4 @@
-GET http://localhost:3000/urls/details?short_code=76925648
+GET http://localhost:3000/urls/details?short_code=Rdfgb0i
 
 ###
 
@@ -6,5 +6,5 @@ POST http://localhost:3000/urls/shorten
 Content-Type: application/json
 
 {
-  "original_url": "https://www.exampleTwo.com"
+  "original_url": "http://www.example-abc.com"
 }
