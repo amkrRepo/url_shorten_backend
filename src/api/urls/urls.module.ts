@@ -4,6 +4,6 @@ import { UrlsService } from './urls.service';
 
 @Module({
   controllers: [UrlsController],
-  providers: [UrlsService]
+  providers: [UrlsService],
 })
 export class UrlsModule {}

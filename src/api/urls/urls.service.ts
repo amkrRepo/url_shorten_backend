@@ -30,17 +30,10 @@ export class UrlsService {
   }
 
   async createShortUrl(dto: UrlDetailsDto): Promise<urlsModel> {
-    // 1. Deduplication check: has this exact URL already been shortened?
-    const existing = await this.dbService.urls.findFirst({
-      where: { original_url: dto.original_url },
-    });
-
-    if (existing) {
-      return existing;
-    }
-
-    // 2. Not found — attempt to create it, retrying on short_code
-    // collisions and recovering on an original_url race.
+    // Every request creates a fresh row with its own short_code, even
+    // when the original_url has been shortened before. The only unique
+    // constraint is short_code, so the only failure worth retrying is a
+    // generated-code collision.
     let lastError: unknown;
 
     for (let attempt = 0; attempt < MAX_GENERATION_ATTEMPTS; attempt++) {
@@ -58,20 +51,8 @@ export class UrlsService {
           throw error;
         }
 
-        // A unique constraint failed. Find out which one by asking the
-        // database directly, rather than guessing it was short_code:
-        // did original_url just get taken by a concurrent request?
-        const winner = await this.dbService.urls.findFirst({
-          where: { original_url: dto.original_url },
-        });
-        if (winner) {
-          // Yes — another request won the race for this exact URL.
-          // Return its row instead of endlessly retrying a doomed insert.
-          return winner;
-        }
-
-        // original_url still isn't taken, so this collision really was
-        // on short_code. Loop and try a fresh one.
+        // short_code is the only unique constraint, so this collision is
+        // a duplicate generated code. Loop and try a fresh one.
         lastError = error;
       }
     }

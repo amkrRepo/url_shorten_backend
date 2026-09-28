@@ -17,11 +17,10 @@ describe('URLs E2E', () => {
   let prisma: DbService;
 
   beforeAll(async () => {
-    // This assumes the test database schema has already been migrated
-    // against DATABASE_URL from .env.test, e.g. via:
+    // The suite runs against the local test database from .env.test
+    // (url_shortener_test), never against Neon. `pretest:e2e` applies
+    // migrations to that local DB before every run:
     //   dotenv -e .env.test -- prisma migrate deploy
-    // (wired up as the `pretest:e2e` npm script, run automatically
-    // before `npm run test:e2e`).
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
@@ -106,7 +105,7 @@ describe('URLs E2E', () => {
     expect(response.status).toBe(404);
   });
 
-  it('returns the same short_code for two shorten requests with the same original_url', async () => {
+  it('creates a new short_code for each shorten request with the same original_url', async () => {
     const originalUrl = 'https://example.com/same-page';
 
     const firstResponse = await request(app.getHttpServer())
@@ -119,8 +118,16 @@ describe('URLs E2E', () => {
 
     expect(firstResponse.status).toBe(201);
     expect(secondResponse.status).toBe(201);
-    expect(firstResponse.body.short_code).toBe(secondResponse.body.short_code);
-    expect(secondResponse.body.id).toBe(firstResponse.body.id);
+    expect(secondResponse.body.short_code).not.toBe(
+      firstResponse.body.short_code,
+    );
+    expect(secondResponse.body.id).not.toBe(firstResponse.body.id);
+
+    // Both rows are persisted, one per request.
+    const allMatching = await prisma.urls.findMany({
+      where: { original_url: originalUrl },
+    });
+    expect(allMatching).toHaveLength(2);
   });
 
   it('returns 400 when the short_code query parameter is missing entirely', async () => {
@@ -135,11 +142,10 @@ describe('URLs E2E', () => {
     expect(response.status).toBe(400);
   });
 
-  it('returns the same short_code for two concurrent requests with the same original_url (race condition)', async () => {
-    // This is the only test that actually exercises the P2002-on-
-    // original_url catch block in UrlsService — the sequential
-    // dedup test above never triggers that race path, since the
-    // first request always fully completes before the second starts.
+  it('creates distinct short_codes for two concurrent requests with the same original_url', async () => {
+    // Both inserts race with no original_url constraint to serialize them,
+    // so each must land as its own row with its own short_code. The retry
+    // loop in UrlsService only guards against short_code collisions.
     const originalUrl = `https://example.com/race-test-${Date.now()}`;
 
     const [firstResponse, secondResponse] = await Promise.all([
@@ -153,13 +159,15 @@ describe('URLs E2E', () => {
 
     expect(firstResponse.status).toBe(201);
     expect(secondResponse.status).toBe(201);
-    expect(secondResponse.body.short_code).toBe(firstResponse.body.short_code);
-    expect(secondResponse.body.id).toBe(firstResponse.body.id);
+    expect(secondResponse.body.short_code).not.toBe(
+      firstResponse.body.short_code,
+    );
+    expect(secondResponse.body.id).not.toBe(firstResponse.body.id);
 
-    // And only one row should actually exist in the database.
+    // Two rows should exist in the database, one per request.
     const allMatching = await prisma.urls.findMany({
       where: { original_url: originalUrl },
     });
-    expect(allMatching).toHaveLength(1);
+    expect(allMatching).toHaveLength(2);
   });
 });

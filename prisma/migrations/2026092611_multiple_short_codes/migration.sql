@@ -1,0 +1,2 @@
+ALTER TABLE URLS
+DROP CONSTRAINT urls_original_url_key;
