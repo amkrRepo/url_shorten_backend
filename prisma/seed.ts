@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { PrismaClient } from '../generated/prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { generateShortCode } from '../common/short-code-utils';
+import { seedUsers } from './seed-users';
 
 const adapter = new PrismaPg({
   connectionString: process.env.DATABASE_URL,
@@ -18,11 +19,12 @@ function randomCreatedAt(): Date {
   return new Date(now - Math.floor(Math.random() * PAST_MS));
 }
 
-function buildBatch(batchIndex: number, size: number) {
+function buildBatch(batchIndex: number, size: number, userIds: number[]) {
   const rows: {
     original_url: string;
     short_code: string;
     created_at: Date;
+    user_id: number;
   }[] = [];
   for (let i = 0; i < size; i++) {
     const globalIndex = batchIndex * BATCH_SIZE + i;
@@ -30,12 +32,18 @@ function buildBatch(batchIndex: number, size: number) {
       original_url: `https://example.com/dummy-resource/${globalIndex}`,
       short_code: generateShortCode(),
       created_at: randomCreatedAt(),
+      user_id: userIds[globalIndex % userIds.length],
     });
   }
   return rows;
 }
 
 async function main() {
+  const userIds = await seedUsers(prisma);
+  if (userIds.length === 0) {
+    throw new Error('No users were seeded; cannot assign user_id to Url rows.');
+  }
+
   console.log(`Seeding ${SEED_COUNT} Url rows in batches of ${BATCH_SIZE}...`);
   const startedAt = Date.now();
   const totalBatches = Math.ceil(SEED_COUNT / BATCH_SIZE);
@@ -44,7 +52,7 @@ async function main() {
   for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
     const remaining = SEED_COUNT - inserted;
     const size = Math.min(BATCH_SIZE, remaining);
-    const rows = buildBatch(batchIndex, size);
+    const rows = buildBatch(batchIndex, size, userIds);
 
     const result = await prisma.urls.createMany({
       data: rows,
