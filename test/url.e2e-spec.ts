@@ -30,15 +30,41 @@ describe('URLs E2E', () => {
   const shortenBody = (response: request.Response): ShortenBody =>
     response.body as ShortenBody;
 
-  const shorten = (original_url: string, apiKey?: string) => {
+  const shorten = (
+    original_url: string,
+    apiKey?: string,
+    options: { expiry_date?: string; custom_code?: string } = {},
+  ) => {
     const req = request(app.getHttpServer())
       .post('/urls/shorten')
       .set('Content-Type', 'application/json');
     if (apiKey) {
       req.set('x-api-key', apiKey);
     }
-    return req.send({ original_url });
+    return req.send({ original_url, ...options });
   };
+
+  // Sends the payload as-is so tests can also cover malformed bodies
+  // (empty array, non-array, oversized batch, ...). Typed as `object`
+  // because superagent's send() only accepts `string | object`.
+  const shortenBatch = (payload: object, apiKey?: string) => {
+    const req = request(app.getHttpServer())
+      .post('/urls/shorten/batch')
+      .set('Content-Type', 'application/json');
+    if (apiKey) {
+      req.set('x-api-key', apiKey);
+    }
+    return req.send(payload);
+  };
+
+  interface BatchBody {
+    total: number;
+    successful: (ShortenBody & { index: number })[];
+    failed: { index: number; original_url: string; message: string }[];
+  }
+
+  const batchBody = (response: request.Response): BatchBody =>
+    response.body as BatchBody;
 
   beforeAll(async () => {
     // The suite runs against the local test database from .env.test
@@ -293,5 +319,186 @@ describe('URLs E2E', () => {
       `/urls/details?short_code=${short_code}`,
     );
     expect(detailsResponse.status).toBe(404);
+  });
+
+  it('returns 410 when creating a url with an expiry_date in the past', async () => {
+    const createResponse = await shorten('https://example.com', KEY_A, {
+      expiry_date: '2026-09-30',
+    });
+    expect(createResponse.status).toBe(410);
+  });
+
+  it('returns 410 when fetching an expired url', async () => {
+    // Seeded through Prisma because creation rejects past expiry dates,
+    // so an expired row can only exist by bypassing the API.
+    const expired = await prisma.urls.create({
+      data: {
+        original_url: 'https://example.com/expired',
+        short_code: 'expired-code',
+        expiry_date: new Date('2026-09-30'),
+      },
+    });
+
+    const detailsResponse = await request(app.getHttpServer()).get(
+      `/urls/details?short_code=${expired.short_code}`,
+    );
+    expect(detailsResponse.status).toBe(410);
+
+    const redirectResponse = await request(app.getHttpServer()).get(
+      `/urls/redirect?short_code=${expired.short_code}`,
+    );
+    expect(redirectResponse.status).toBe(410);
+  });
+
+  it('creates a url with the custom code requested by the user', async () => {
+    const createResponse = await shorten('https://example.com', KEY_A, {
+      custom_code: 'awesome-article',
+    });
+    expect(createResponse.status).toBe(201);
+    const created = shortenBody(createResponse);
+    expect(created.short_code).toBe('awesome-article');
+    expect(created.original_url).toBe('https://example.com');
+
+    // The requested code is usable immediately, just like a generated one.
+    const redirectResponse = await request(app.getHttpServer()).get(
+      '/urls/redirect?short_code=awesome-article',
+    );
+    expect(redirectResponse.status).toBe(302);
+    expect(redirectResponse.headers['location']).toBe('https://example.com');
+  });
+
+  it('returns 409 when the requested custom code is already taken', async () => {
+    const first = await shorten('https://example.com', KEY_A, {
+      custom_code: 'taken-code',
+    });
+    expect(first.status).toBe(201);
+
+    const second = await shorten('https://other.example.com', KEY_A, {
+      custom_code: 'taken-code',
+    });
+    expect(second.status).toBe(409);
+    expect((second.body as { error: string }).error).toBe('Conflict');
+
+    // The first url keeps the code and its original target.
+    const detailsResponse = await request(app.getHttpServer()).get(
+      '/urls/details?short_code=taken-code',
+    );
+    expect(detailsResponse.status).toBe(202);
+    expect(
+      (detailsResponse.body as { original_url: string }).original_url,
+    ).toBe('https://example.com');
+  });
+
+  it('returns 400 when custom_code does not match the allowed format', async () => {
+    const invalidCodes = ['ab', 'x'.repeat(31), 'has space', 'bad!/code', ''];
+
+    for (const custom_code of invalidCodes) {
+      const response = await shorten('https://example.com', KEY_A, {
+        custom_code,
+      });
+      expect(response.status).toBe(400);
+    }
+  });
+
+  it('shortens every url of a batch when all entries are valid', async () => {
+    const response = await shortenBatch(
+      {
+        urls: [
+          'https://example.com/a',
+          'https://example.com/a',
+          'https://example.com/b',
+        ],
+      },
+      KEY_A,
+    );
+
+    expect(response.status).toBe(207);
+    const batch = batchBody(response);
+    expect(batch.total).toBe(3);
+    expect(batch.successful).toHaveLength(3);
+    expect(batch.failed).toHaveLength(0);
+    expect(batch.successful.map((entry) => entry.index)).toEqual([0, 1, 2]);
+
+    // Duplicate entries each get their own short_code and row.
+    expect(batch.successful[0].short_code).not.toBe(
+      batch.successful[1].short_code,
+    );
+    expect(await prisma.urls.count()).toBe(3);
+
+    // Codes returned by the batch behave like any other short code.
+    const redirectResponse = await request(app.getHttpServer()).get(
+      `/urls/redirect?short_code=${batch.successful[0].short_code}`,
+    );
+    expect(redirectResponse.status).toBe(302);
+    expect(redirectResponse.headers['location']).toBe('https://example.com/a');
+  });
+
+  it('returns partial success when some entries of the batch fail', async () => {
+    const response = await shortenBatch(
+      {
+        urls: [
+          'https://example.com/good-1',
+          'not-a-url',
+          'https://example.com/good-2',
+        ],
+      },
+      KEY_A,
+    );
+
+    expect(response.status).toBe(207);
+    const batch = batchBody(response);
+    expect(batch.total).toBe(3);
+    expect(batch.successful.map((entry) => entry.index)).toEqual([0, 2]);
+    expect(batch.failed).toHaveLength(1);
+    expect(batch.failed[0]).toEqual({
+      index: 1,
+      original_url: 'not-a-url',
+      message: 'original_url is not a valid URL',
+    });
+
+    // Only the valid entries were persisted.
+    expect(await prisma.urls.count()).toBe(2);
+    const persisted = await prisma.urls.findMany({
+      where: { original_url: { startsWith: 'https://example.com/good-' } },
+      orderBy: { original_url: 'asc' },
+    });
+    expect(persisted.map((url) => url.original_url)).toEqual([
+      'https://example.com/good-1',
+      'https://example.com/good-2',
+    ]);
+  });
+
+  it('reports every entry as failed when no url in the batch is valid', async () => {
+    const response = await shortenBatch(
+      { urls: ['not-a-url', 'also not a url'] },
+      KEY_A,
+    );
+
+    expect(response.status).toBe(207);
+    const batch = batchBody(response);
+    expect(batch.total).toBe(2);
+    expect(batch.successful).toHaveLength(0);
+    expect(batch.failed.map((entry) => entry.index)).toEqual([0, 1]);
+    expect(await prisma.urls.count()).toBe(0);
+  });
+
+  it('returns 400 when the batch payload is malformed', async () => {
+    const payloads: object[] = [
+      {},
+      { urls: [] },
+      { urls: 'https://example.com' },
+      { urls: [123] },
+      { urls: new Array(101).fill('https://example.com') },
+    ];
+
+    for (const payload of payloads) {
+      const response = await shortenBatch(payload, KEY_A);
+      expect(response.status).toBe(400);
+    }
+  });
+
+  it('returns 401 when batching without an API key', async () => {
+    const response = await shortenBatch({ urls: ['https://example.com'] });
+    expect(response.status).toBe(401);
   });
 });

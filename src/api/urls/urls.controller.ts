@@ -12,7 +12,7 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
-import { UrlDetailsDto } from './dto/urls.dto';
+import { BatchShortenDto, UrlDetailsDto } from './dto/urls.dto';
 import { UrlsService } from './urls.service';
 import type { Response } from 'express';
 import { APIKeyGuard } from '../../auth/guards/api-key.guard';
@@ -46,6 +46,19 @@ export class UrlsController {
   @HttpCode(HttpStatus.CREATED)
   shorten(@Body() dto: UrlDetailsDto, @Req() req: AuthenticatedRequest) {
     return this.urlsService.createShortUrl(dto, req.user.id);
+  }
+
+  /**
+   * Batch shorten. Entries are processed independently: valid URLs are
+   * persisted and listed under `successful`, invalid ones land under
+   * `failed` with the reason. 207 Multi-Status signals that the body
+   * carries per-entry outcomes rather than one request-wide result.
+   */
+  @Post('shorten/batch')
+  @UseGuards(APIKeyGuard)
+  @HttpCode(207)
+  shortenBatch(@Body() dto: BatchShortenDto, @Req() req: AuthenticatedRequest) {
+    return this.urlsService.createShortUrlsBatch(dto.urls, req.user.id);
   }
 
   @Get('redirect')
