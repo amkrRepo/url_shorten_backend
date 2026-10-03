@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { PrismaClient } from '../generated/prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
-import { generateShortCode } from '../common/short-code-utils';
+import { generateShortCode } from '../src/common/short-code-utils';
 import { seedUsers } from './seed-users';
 
 const adapter = new PrismaPg({

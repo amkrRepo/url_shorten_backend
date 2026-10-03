@@ -1,12 +1,12 @@
 import {
-  BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { DbService } from '../../db/db.service';
 import type { UrlDetailsDto } from './dto/urls.dto';
 import type { urlsModel } from 'generated/prisma/models/urls';
-import { generateShortCode } from '../../../common/short-code-utils';
+import { generateShortCode } from '../../common/short-code-utils';
 
 const MAX_GENERATION_ATTEMPTS = 5;
 @Injectable()
@@ -14,22 +14,21 @@ export class UrlsService {
   constructor(private readonly dbService: DbService) {}
 
   async getUrlDetails(short_code: string) {
-    try {
-      const urlDetails = await this.dbService.urls.findUnique({
-        where: { short_code },
-      });
+    const urlDetails = await this.dbService.urls.findUnique({
+      where: { short_code },
+    });
 
-      if (!urlDetails) {
-        throw new BadRequestException('URL not found');
-      }
-
-      return urlDetails;
-    } catch {
-      throw new BadRequestException('URL not found');
+    if (!urlDetails || urlDetails.deleted_at) {
+      throw new NotFoundException('URL not found');
     }
+
+    return urlDetails;
   }
 
-  async createShortUrl(dto: UrlDetailsDto): Promise<urlsModel> {
+  async createShortUrl(
+    dto: UrlDetailsDto,
+    userId?: number,
+  ): Promise<urlsModel> {
     // Every request creates a fresh row with its own short_code, even
     // when the original_url has been shortened before. The only unique
     // constraint is short_code, so the only failure worth retrying is a
@@ -43,6 +42,7 @@ export class UrlsService {
           data: {
             original_url: dto.original_url,
             short_code,
+            user_id: userId ?? null,
           },
         });
       } catch (error) {
@@ -61,12 +61,14 @@ export class UrlsService {
   }
 
   /**
-   * Looks up a URL by its short_code. Throws NotFoundException (404)
-   * when no matching record exists; any other Prisma/DB error is left
-   * to bubble up untouched so it surfaces as a 500.
+   * Looks up a live (not soft-deleted) URL by its short_code and records
+   * the visit. Throws NotFoundException (404) when no matching record
+   * exists or the record has been deleted.
    */
   async findByShortCode(short_code: string): Promise<urlsModel> {
-    const url = await this.dbService.urls.findUnique({ where: { short_code } });
+    const url = await this.dbService.urls.findFirst({
+      where: { short_code, deleted_at: null },
+    });
 
     if (!url) {
       throw new NotFoundException(
@@ -75,7 +77,7 @@ export class UrlsService {
     }
 
     const updatedUrl = await this.dbService.urls.update({
-      where: { short_code },
+      where: { id: url.id },
       data: {
         visit_count: {
           increment: 1,
@@ -87,9 +89,32 @@ export class UrlsService {
     return updatedUrl;
   }
 
-  async deleteByShortCode(short_code: string): Promise<void> {
+  async deleteByShortCode({
+    short_code,
+    userId,
+  }: {
+    short_code: string;
+    userId: number;
+  }): Promise<void> {
+    const url = await this.dbService.urls.findFirst({
+      where: { short_code, deleted_at: null },
+    });
+
+    if (!url) {
+      throw new NotFoundException(
+        `No URL found for short_code "${short_code}"`,
+      );
+    }
+
+    if (url.user_id !== userId) {
+      throw new ForbiddenException('You are not allowed to delete this URL');
+    }
+
     try {
-      await this.dbService.urls.delete({ where: { short_code } });
+      await this.dbService.urls.update({
+        where: { id: url.id },
+        data: { deleted_at: true },
+      });
     } catch (error) {
       if (this.isRecordNotFoundError(error)) {
         throw new NotFoundException(
