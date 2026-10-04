@@ -17,6 +17,7 @@ import { UrlsService } from './urls.service';
 import type { Response } from 'express';
 import { APIKeyGuard } from '../../auth/guards/api-key.guard';
 import type { AuthenticatedRequest } from '../../auth/guards/api-key.guard';
+import { TierGuard } from '../../auth/guards/tier.guard';
 @Controller('urls')
 export class UrlsController {
   constructor(private readonly urlsService: UrlsService) {}
@@ -55,7 +56,7 @@ export class UrlsController {
    * carries per-entry outcomes rather than one request-wide result.
    */
   @Post('shorten/batch')
-  @UseGuards(APIKeyGuard)
+  @UseGuards(APIKeyGuard, TierGuard)
   @HttpCode(207)
   shortenBatch(@Body() dto: BatchShortenDto, @Req() req: AuthenticatedRequest) {
     return this.urlsService.createShortUrlsBatch(dto.urls, req.user.id);

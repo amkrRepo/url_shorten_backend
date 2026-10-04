@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty } from 'class-validator';
+import { IsEmail, IsIn, IsNotEmpty } from 'class-validator';
 
 export class UsersDto {
   @IsEmail()
@@ -10,4 +10,13 @@ export class UsersDto {
 
   @IsNotEmpty()
   api_key!: string;
+}
+
+export class UpdateTierDto {
+  @IsEmail()
+  @IsNotEmpty()
+  email!: string;
+
+  @IsIn(['free', 'enterprise'])
+  tier!: 'free' | 'enterprise';
 }

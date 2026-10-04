@@ -92,13 +92,16 @@ describe('URLs E2E', () => {
     prisma = moduleFixture.get<DbService>(DbService);
 
     // Two owners so tests can cover the 403 (wrong API key) path.
+    // KEY_A is enterprise: /urls/shorten/batch is gated by TierGuard, so the
+    // happy-path batch cases need an enterprise caller. KEY_B stays free.
     await prisma.users.upsert({
       where: { email: 'user1@example.com' },
-      update: { api_key: KEY_A },
+      update: { api_key: KEY_A, tier: 'enterprise' },
       create: {
         email: 'user1@example.com',
         name: 'User 1',
         api_key: KEY_A,
+        tier: 'enterprise',
       },
     });
     await prisma.users.upsert({
@@ -495,6 +498,17 @@ describe('URLs E2E', () => {
       const response = await shortenBatch(payload, KEY_A);
       expect(response.status).toBe(400);
     }
+  });
+
+  it('returns 403 when a free tier user calls the batch endpoint', async () => {
+    const response = await shortenBatch(
+      { urls: ['https://example.com'] },
+      KEY_B,
+    );
+
+    expect(response.status).toBe(403);
+    expect(response.body).toMatchObject({ message: 'Upgrade to enterprise' });
+    expect(await prisma.urls.count()).toBe(0);
   });
 
   it('returns 401 when batching without an API key', async () => {
