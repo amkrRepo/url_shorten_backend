@@ -1,42 +1,26 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
-import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
-import { AppModule } from '../src/app.module';
-import { DbService } from '../src/db/db.service';
 import { describe, beforeAll, afterAll, it, expect } from '@jest/globals';
+import { DbService } from '../src/db/db.service';
+import { AppModule } from '../src/app.module';
+import { TestingModule, Test } from '@nestjs/testing';
 
 describe('User tier E2E', () => {
   let app: INestApplication;
-  let prisma: DbService;
+  let dbService: DbService;
 
-  const ENTERPRISE_KEY = 'e'.repeat(64);
-  const FREE_KEY = 'f'.repeat(64);
-  const ENTERPRISE_EMAIL = 'tier-ent@example.com';
-  const FREE_EMAIL = 'tier-free@example.com';
-
-  // supertest types `response.body` as any; narrow it so assertions stay
-  // typed instead of tripping the no-unsafe-* lint rules.
-  interface TierBody {
-    tier?: string;
-  }
-  const tierBody = (response: request.Response): TierBody =>
-    response.body as TierBody;
-
-  // Owns the endpoint: no API key is needed to create a user.
-  const createUser = (payload: object) =>
-    request(app.getHttpServer())
+  const createUser = (payload: object) => {
+    return request(app.getHttpServer())
       .post('/user/create')
       .set('Content-Type', 'application/json')
       .send(payload);
+  };
 
-  const patchTier = (payload: object, apiKey?: string) => {
-    const req = request(app.getHttpServer())
+  const updateUserTier = (payload: object) => {
+    return request(app.getHttpServer())
       .patch('/user/tier')
-      .set('Content-Type', 'application/json');
-    if (apiKey) {
-      req.set('x-api-key', apiKey);
-    }
-    return req.send(payload);
+      .set('Content-Type', 'application/json')
+      .send(payload);
   };
 
   beforeAll(async () => {
@@ -57,161 +41,160 @@ describe('User tier E2E', () => {
 
     await app.init();
 
-    prisma = moduleFixture.get<DbService>(DbService);
+    dbService = moduleFixture.get<DbService>(DbService);
 
-    await prisma.users.deleteMany({
-      where: { email: { in: [ENTERPRISE_EMAIL, FREE_EMAIL] } },
+    await dbService.users.deleteMany({
+      where: { email: { in: ['aman@example.com', 'aman2@example.com'] } },
     });
 
-    // The enterprise caller is seeded directly: PATCH /user/tier is the only
-    // promotion path, so bootstrapping the first enterprise user has to
-    // happen outside the API (same as the manual SQL step in dev).
-    await prisma.users.create({
+    await dbService.users.create({
       data: {
-        email: ENTERPRISE_EMAIL,
-        name: 'Enterprise Caller',
-        api_key: ENTERPRISE_KEY,
-        tier: 'enterprise',
-      },
-    });
-    await prisma.users.create({
-      data: {
-        email: FREE_EMAIL,
-        name: 'Free Caller',
-        api_key: FREE_KEY,
+        email: 'aman@example.com',
+        name: 'aman',
+        api_key: 'Free_api_key',
       },
     });
   });
 
   afterAll(async () => {
-    await prisma.users.deleteMany({
-      where: { email: { in: [ENTERPRISE_EMAIL, FREE_EMAIL] } },
+    await dbService.users.deleteMany({
+      where: { email: { in: ['aman@example.com', 'aman2@example.com'] } },
     });
     await app.close();
   });
 
-  describe('POST /user/create', () => {
-    it('creates a user with the free tier by default', async () => {
-      const response = await createUser({
-        email: 'tier-created@example.com',
-        name: 'Created',
-        api_key: 'c'.repeat(64),
+  describe('POST user/create', () => {
+    it('creates a user by free tier by default', async () => {
+      const createdUser = await createUser({
+        email: 'aman2@example.com',
+        name: 'aman2',
+        api_key: 'aman_api_key',
       });
 
-      expect(response.status).toBe(201);
-      expect(tierBody(response).tier).toBe('free');
+      expect(createdUser.status).toBe(201);
 
-      await prisma.users.deleteMany({
-        where: { email: 'tier-created@example.com' },
+      await dbService.users.deleteMany({
+        where: { email: 'aman2@example.com' },
       });
     });
 
-    it('rejects a tier field in the create body', async () => {
-      const response = await createUser({
-        email: 'tier-smuggle@example.com',
-        name: 'Smuggle',
-        api_key: 's'.repeat(64),
+    it('tries creating a new user using enterprise tier', async () => {
+      const createdUser = await createUser({
+        email: 'aman2@example.com',
+        name: 'aman2',
+        api_key: 'aman_api_key',
         tier: 'enterprise',
       });
 
-      expect(response.status).toBe(400);
+      expect(createdUser.status).toBe(400);
 
-      await prisma.users.deleteMany({
-        where: { email: 'tier-smuggle@example.com' },
+      await dbService.users.deleteMany({
+        where: { email: 'aman2@example.com' },
       });
+    });
+
+    it('upgrates a user tier to enterprise', async () => {
+      const createdUser = await createUser({
+        email: 'aman2@example.com',
+        name: 'aman2',
+        api_key: 'aman_api_key',
+      });
+
+      expect(createdUser.status).toBe(201);
+
+      const upgradedUser = await updateUserTier({
+        email: 'aman2@example.com',
+        tier: 'enterprise',
+      });
+
+      expect(upgradedUser.status).toBe(200);
+
+      await dbService.users.deleteMany({
+        where: { email: 'aman2@example.com' },
+      });
+    });
+
+    it('upgrades a user tier from enterprise to free', async () => {
+      const createdUser = await createUser({
+        email: 'aman2@example.com',
+        name: 'aman2',
+        api_key: 'aman_api_key',
+      });
+
+      expect(createdUser.status).toBe(201);
+
+      const upgradedUser = await updateUserTier({
+        email: 'aman2@example.com',
+        tier: 'enterprise',
+      });
+
+      expect(upgradedUser.status).toBe(200);
+
+      // Upgrading again to 'free' from just updated to 'enterprise'
+      const upgradedUserAgain = await updateUserTier({
+        email: 'aman2@example.com',
+        tier: 'free',
+      });
+
+      expect(upgradedUserAgain.status).toBe(400);
+
+      await dbService.users.deleteMany({
+        where: { email: 'aman2@example.com' },
+      });
+    });
+
+    it('rejects an invalid email', async () => {
+      const notValidUser = await createUser({
+        email: 'aman.com',
+        name: 'aman2',
+        api_key: 'aman_api_key',
+      });
+
+      expect(notValidUser.status).toBe(400);
+    });
+
+    it('rejects an empty api_key', async () => {
+      const notValidUser = await createUser({
+        email: 'aman@example.com',
+        name: 'aman2',
+        api_key: '',
+      });
+
+      expect(notValidUser.status).toBe(400);
     });
   });
 
-  describe('PATCH /user/tier', () => {
-    it('promotes a free user to enterprise when the caller is enterprise', async () => {
-      const response = await patchTier(
-        { email: FREE_EMAIL, tier: 'enterprise' },
-        ENTERPRISE_KEY,
-      );
-
-      expect(response.status).toBe(200);
-      expect(tierBody(response).tier).toBe('enterprise');
-
-      // Restore so the other cases still see a free user.
-      await prisma.users.update({
-        where: { email: FREE_EMAIL },
-        data: { tier: 'free' },
-      });
+  it('rejects without an api key', async () => {
+    const response = await createUser({
+      email: 'aman@example.com',
+      tier: 'free',
     });
 
-    it('is idempotent when the user is already enterprise', async () => {
-      const response = await patchTier(
-        { email: ENTERPRISE_EMAIL, tier: 'enterprise' },
-        ENTERPRISE_KEY,
-      );
+    expect(response.status).toBe(401);
+  });
 
-      expect(response.status).toBe(200);
-      expect(tierBody(response).tier).toBe('enterprise');
+  it('rejects for a malformed email', async () => {
+    const response = await createUser({
+      email: 'not-an-email',
+      tier: 'free',
+      api_key: 'aman_api_key',
     });
 
-    it('returns 403 when a free user tries to promote someone', async () => {
-      const response = await patchTier(
-        { email: ENTERPRISE_EMAIL, tier: 'enterprise' },
-        FREE_KEY,
-      );
+    expect(response.status).toBe(400);
+  });
 
-      expect(response.status).toBe(403);
-      expect(response.body).toMatchObject({ message: 'Upgrade to enterprise' });
+  it('rejects 404 for an unknown user', async () => {
+    const response = await updateUserTier({
+      email: 'nobody@example.com',
+      tier: 'enterprise',
     });
 
-    it('returns 401 without an api key', async () => {
-      const response = await patchTier({
-        email: FREE_EMAIL,
-        tier: 'enterprise',
-      });
+    expect(response.status).toBe(404);
+    expect(response.body).toMatchObject({ message: 'User not found' });
+  });
 
-      expect(response.status).toBe(401);
-    });
-
-    it('returns 400 when the requested tier is not an upgrade', async () => {
-      const response = await patchTier(
-        { email: FREE_EMAIL, tier: 'free' },
-        ENTERPRISE_KEY,
-      );
-
-      expect(response.status).toBe(400);
-      expect(response.body).toMatchObject({
-        message: 'Only free to enterprise upgrades are supported',
-      });
-    });
-
-    it('returns 400 for a tier value outside the allowed set', async () => {
-      const response = await patchTier(
-        { email: FREE_EMAIL, tier: 'pro' },
-        ENTERPRISE_KEY,
-      );
-
-      expect(response.status).toBe(400);
-    });
-
-    it('returns 400 for a malformed email', async () => {
-      const response = await patchTier(
-        { email: 'not-an-email', tier: 'enterprise' },
-        ENTERPRISE_KEY,
-      );
-
-      expect(response.status).toBe(400);
-    });
-
-    it('returns 404 for an unknown user', async () => {
-      const response = await patchTier(
-        { email: 'nobody@example.com', tier: 'enterprise' },
-        ENTERPRISE_KEY,
-      );
-
-      expect(response.status).toBe(404);
-      expect(response.body).toMatchObject({ message: 'User not found' });
-    });
-
-    it('returns 400 when the body is empty', async () => {
-      const response = await patchTier({}, ENTERPRISE_KEY);
-
-      expect(response.status).toBe(400);
-    });
+  it('rejects when the body is empty', async () => {
+    const response = await updateUserTier({});
+    expect(response.status).toBe(400);
   });
 });

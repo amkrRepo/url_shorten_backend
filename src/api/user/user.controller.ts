@@ -5,12 +5,9 @@ import {
   HttpStatus,
   Patch,
   Post,
-  UseGuards,
 } from '@nestjs/common';
 import { UpdateTierDto, UsersDto } from './dto/user.dto';
 import { UserService } from './user.service';
-import { TierGuard } from '../../auth/guards/tier.guard';
-import { APIKeyGuard } from '../../auth/guards/api-key.guard';
 
 @Controller('user')
 export class UserController {
@@ -22,8 +19,9 @@ export class UserController {
     return this.userService.createNewUser(dto);
   }
 
+  // No APIKeyGuard/TierGuard: any caller (or none) may promote a free
+  // user to enterprise. Downgrades are rejected by UpdateTierDto.
   @Patch('tier')
-  @UseGuards(APIKeyGuard, TierGuard)
   @HttpCode(HttpStatus.OK)
   updateTier(@Body() dto: UpdateTierDto) {
     return this.userService.updateUserTier(dto.email, dto.tier);

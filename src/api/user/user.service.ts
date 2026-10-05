@@ -30,7 +30,7 @@ export class UserService {
     });
   }
 
-  async updateUserTier(email: string, tier: 'free' | 'enterprise') {
+  async updateUserTier(email: string, tier: 'enterprise') {
     if (tier !== 'enterprise') {
       throw new BadRequestException(
         'Only free to enterprise upgrades are supported',

@@ -17,6 +17,8 @@ export class UpdateTierDto {
   @IsNotEmpty()
   email!: string;
 
-  @IsIn(['free', 'enterprise'])
-  tier!: 'free' | 'enterprise';
+  // Only free -> enterprise is supported; there is no downgrade path, so
+  // 'free' is not a valid target.
+  @IsIn(['enterprise'])
+  tier!: 'enterprise';
 }
