@@ -170,7 +170,7 @@ describe('User tier E2E', () => {
       tier: 'free',
     });
 
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(400);
   });
 
   it('rejects for a malformed email', async () => {

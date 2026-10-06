@@ -234,6 +234,53 @@ export class UrlsService {
     }
   }
 
+  async updateShortCode({
+    short_code,
+    new_short_code,
+    userId,
+  }: {
+    short_code: string;
+    new_short_code: string;
+    userId: number;
+  }): Promise<urlsModel> {
+    const url = await this.dbService.urls.findFirst({
+      where: { short_code, deleted_at: null },
+    });
+
+    if (!url) {
+      throw new NotFoundException(
+        `No URL found for short_code "${short_code}"`,
+      );
+    }
+
+    if (url.user_id !== userId) {
+      throw new ForbiddenException('You are not allowed to update this URL');
+    }
+
+    if (url.short_code === new_short_code) {
+      return url;
+    }
+
+    try {
+      return await this.dbService.urls.update({
+        where: { id: url.id },
+        data: { short_code: new_short_code, updated_at: new Date() },
+      });
+    } catch (error) {
+      if (this.isUniqueConstraintViolation(error)) {
+        throw new ConflictException(
+          `custom_code "${new_short_code}" is already taken`,
+        );
+      }
+      if (this.isRecordNotFoundError(error)) {
+        throw new NotFoundException(
+          `No URL found for short_code "${short_code}"`,
+        );
+      }
+      throw error;
+    }
+  }
+
   /**
    * expiry_date is a DATE column, so the URL stays valid through the
    * whole expiry day and only expires once that day is over (local time).

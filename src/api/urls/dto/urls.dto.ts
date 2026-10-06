@@ -32,6 +32,15 @@ export class UrlDetailsDto {
   custom_code?: string;
 }
 
+export class UpdateShortCodeDto {
+  @IsString()
+  @Matches(CUSTOM_CODE_PATTERN, {
+    message:
+      'new_short_code must be 3-30 characters long and contain only letters, numbers, "-" or "_"',
+  })
+  new_short_code!: string;
+}
+
 /**
  * Structural validation only: an entry that is not a valid URL must not
  * reject the whole batch, it becomes a per-entry failure instead.

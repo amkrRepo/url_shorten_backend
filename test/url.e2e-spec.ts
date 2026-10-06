@@ -44,6 +44,22 @@ describe('URLs E2E', () => {
     return req.send({ original_url, ...options });
   };
 
+  const updateShortCode = (
+    shortCode: string,
+    apiKey: string,
+    newShortCode: string,
+  ) => {
+    const req = request(app.getHttpServer())
+      .patch(`/urls/update?short_code=${encodeURIComponent(shortCode)}`)
+      .set('Content-Type', 'application/json');
+
+    if (apiKey) {
+      req.set('x-api-key', apiKey);
+    }
+
+    return req.send({ new_short_code: newShortCode });
+  };
+
   // Sends the payload as-is so tests can also cover malformed bodies
   // (empty array, non-array, oversized batch, ...). Typed as `object`
   // because superagent's send() only accepts `string | object`.
@@ -515,4 +531,70 @@ describe('URLs E2E', () => {
     const response = await shortenBatch({ urls: ['https://example.com'] });
     expect(response.status).toBe(401);
   });
+
+  // Tests for update short_code
+
+  it('returns 200 when updated url short_code', async () => {
+    const createdResponse = await shorten('https://example.com', KEY_A);
+    const { short_code } = shortenBody(createdResponse);
+
+    const updatedShortCode = await updateShortCode(
+      short_code,
+      KEY_A,
+      'new_code_123',
+    );
+
+    expect(updatedShortCode.status).toBe(200);
+    expect(shortenBody(updatedShortCode).short_code).toBe('new_code_123');
+  });
+
+  it('returns 400 when new_short_code is empty string', async () => {
+    const createdResponse = await shorten('https://example.com', KEY_A);
+    const { short_code } = shortenBody(createdResponse);
+
+    const updatedShortCode = await updateShortCode(short_code, KEY_A, '');
+
+    expect(updatedShortCode.status).toBe(400);
+  });
+
+  it('returns 403 when updating a URL that belongs to another user', async () => {
+    const createdResponse = await shorten('https://example.com', KEY_A);
+    expect(createdResponse.status).toBe(201);
+    const { short_code } = shortenBody(createdResponse);
+
+    const response = await updateShortCode(short_code, KEY_B, 'hijacked_code');
+
+    expect(response.status).toBe(403);
+
+    // The URL must keep its original short_code and still be live after
+    // the rejected attempt.
+    const redirectResponse = await request(app.getHttpServer()).get(
+      `/urls/redirect?short_code=${short_code}`,
+    );
+    // means: the original short_code still exists in the DB and still points at https://example.com.
+    expect(redirectResponse.status).toBe(302);
+
+    const detailsResponse = await request(app.getHttpServer()).get(
+      `/urls/details?short_code=${short_code}`,
+    );
+    // returns 202 with the row's data when the code exists and isn't deleted/short-circuited.
+    expect(detailsResponse.status).toBe(202);
+    const hijackRedirect = await request(app.getHttpServer()).get(
+      '/urls/redirect?short_code=hijacked_code',
+    );
+    // If the hijack had (wrongly) worked, the row's short_code would now be hijacked_code,
+    // this lookup would find nothing, and you'd get a 404 instead.
+    expect(hijackRedirect.status).toBe(404);
+  });
+
+  it('returns 404 when short_code that is used for update does not exist', async () => {
+    const updatedShortCode = await updateShortCode(
+      'doesNotExist',
+      'https://example.com',
+      'updated_code',
+    );
+    expect(updatedShortCode.status).toBe(404);
+  });
+
+  it('', async () => {});
 });

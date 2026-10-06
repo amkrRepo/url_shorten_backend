@@ -19,8 +19,6 @@ export class UserController {
     return this.userService.createNewUser(dto);
   }
 
-  // No APIKeyGuard/TierGuard: any caller (or none) may promote a free
-  // user to enterprise. Downgrades are rejected by UpdateTierDto.
   @Patch('tier')
   @HttpCode(HttpStatus.OK)
   updateTier(@Body() dto: UpdateTierDto) {

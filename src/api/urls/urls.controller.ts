@@ -6,13 +6,18 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Patch,
   Post,
   Query,
   Req,
   Res,
   UseGuards,
 } from '@nestjs/common';
-import { BatchShortenDto, UrlDetailsDto } from './dto/urls.dto';
+import {
+  BatchShortenDto,
+  UpdateShortCodeDto,
+  UrlDetailsDto,
+} from './dto/urls.dto';
 import { UrlsService } from './urls.service';
 import type { Response } from 'express';
 import { APIKeyGuard } from '../../auth/guards/api-key.guard';
@@ -49,12 +54,6 @@ export class UrlsController {
     return this.urlsService.createShortUrl(dto, req.user.id);
   }
 
-  /**
-   * Batch shorten. Entries are processed independently: valid URLs are
-   * persisted and listed under `successful`, invalid ones land under
-   * `failed` with the reason. 207 Multi-Status signals that the body
-   * carries per-entry outcomes rather than one request-wide result.
-   */
   @Post('shorten/batch')
   @UseGuards(APIKeyGuard, TierGuard)
   @HttpCode(207)
@@ -86,6 +85,23 @@ export class UrlsController {
 
     await this.urlsService.deleteByShortCode({
       short_code: code,
+      userId: req.user.id,
+    });
+  }
+
+  @Patch('update')
+  @UseGuards(APIKeyGuard)
+  @HttpCode(HttpStatus.OK)
+  async update(
+    @Query('short_code') short_code: string | string[],
+    @Body() dto: UpdateShortCodeDto,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    const code = this.requireShortCode(short_code);
+
+    return this.urlsService.updateShortCode({
+      short_code: code,
+      new_short_code: dto.new_short_code,
       userId: req.user.id,
     });
   }
