@@ -15,6 +15,7 @@ import {
 } from '@nestjs/common';
 import {
   BatchShortenDto,
+  DeleteShortCode,
   UpdateShortCodeDto,
   UrlDetailsDto,
 } from './dto/urls.dto';
@@ -41,6 +42,20 @@ export class UrlsController {
     return short_code;
   }
 
+  /**
+   * `?password=a&password=b` (or `?password=`) makes Express give an array
+   * or an empty string instead of the single password. Normalize both to
+   * `undefined` so a protected short_code reports 403 instead of being
+   * compared against a malformed value.
+   */
+  private optionalPassword(
+    password: string | string[] | undefined,
+  ): string | undefined {
+    return typeof password === 'string' && password.length > 0
+      ? password
+      : undefined;
+  }
+
   @Get('details')
   @HttpCode(HttpStatus.ACCEPTED)
   getUrlDetails(@Query('short_code') short_code: string | string[]) {
@@ -65,11 +80,15 @@ export class UrlsController {
   @HttpCode(HttpStatus.PERMANENT_REDIRECT)
   async redirect(
     @Query('short_code') short_code: string | string[],
+    @Query('password') password: string | string[] | undefined,
     @Res() res: Response,
   ) {
     const code = this.requireShortCode(short_code);
 
-    const url = await this.urlsService.findByShortCode(code);
+    const url = await this.urlsService.findByShortCode(
+      code,
+      this.optionalPassword(password),
+    );
 
     res.redirect(HttpStatus.FOUND, url.original_url);
   }
@@ -79,6 +98,7 @@ export class UrlsController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async delete(
     @Query('short_code') short_code: string | string[],
+    @Body() dto: DeleteShortCode,
     @Req() req: AuthenticatedRequest,
   ) {
     const code = this.requireShortCode(short_code);
@@ -86,6 +106,7 @@ export class UrlsController {
     await this.urlsService.deleteByShortCode({
       short_code: code,
       userId: req.user.id,
+      password: dto?.password,
     });
   }
 
@@ -103,6 +124,8 @@ export class UrlsController {
       short_code: code,
       new_short_code: dto.new_short_code,
       userId: req.user.id,
+      password: dto.password,
+      clearPassword: dto.clearPassword,
     });
   }
 }

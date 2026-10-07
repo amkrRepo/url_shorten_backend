@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   GoneException,
@@ -11,6 +12,7 @@ import { DbService } from '../../db/db.service';
 import type { UrlDetailsDto } from './dto/urls.dto';
 import type { urlsModel } from 'generated/prisma/models/urls';
 import { generateShortCode } from '../../common/short-code-utils';
+import { hashPassword, verifyPassword } from '../../common/password-utils';
 
 const MAX_GENERATION_ATTEMPTS = 5;
 
@@ -168,9 +170,13 @@ export class UrlsService {
   /**
    * Looks up a live (not soft-deleted) URL by its short_code and records
    * the visit. Throws NotFoundException (404) when no matching record
-   * exists or the record has been deleted.
+   * exists or the record has been deleted, and ForbiddenException (403)
+   * when the record is password protected and `password` does not match.
    */
-  async findByShortCode(short_code: string): Promise<urlsModel> {
+  async findByShortCode(
+    short_code: string,
+    password?: string,
+  ): Promise<urlsModel> {
     const url = await this.dbService.urls.findFirst({
       where: { short_code, deleted_at: null },
     });
@@ -185,6 +191,10 @@ export class UrlsService {
       throw new GoneException('This URL has expired');
     }
 
+    // Verified before the visit is recorded so a rejected attempt never
+    // counts as a visit.
+    await this.assertPasswordMatches(url, password);
+
     const updatedUrl = await this.dbService.urls.update({
       where: { id: url.id },
       data: {
@@ -198,12 +208,39 @@ export class UrlsService {
     return updatedUrl;
   }
 
+  /**
+   * Rejects access to a password-protected short_code when no password is
+   * supplied or when it does not match the stored hash. Rows without a
+   * password are always allowed.
+   */
+  private async assertPasswordMatches(
+    url: Pick<urlsModel, 'short_code' | 'password'>,
+    password?: string,
+  ): Promise<void> {
+    if (!url.password) {
+      return;
+    }
+
+    if (!password) {
+      throw new ForbiddenException(
+        `short_code "${url.short_code}" is password protected`,
+      );
+    }
+
+    const matches = await verifyPassword(password, url.password);
+    if (!matches) {
+      throw new ForbiddenException('Incorrect password');
+    }
+  }
+
   async deleteByShortCode({
     short_code,
     userId,
+    password,
   }: {
     short_code: string;
     userId: number;
+    password?: string;
   }): Promise<void> {
     const url = await this.dbService.urls.findFirst({
       where: { short_code, deleted_at: null },
@@ -218,6 +255,8 @@ export class UrlsService {
     if (url.user_id !== userId) {
       throw new ForbiddenException('You are not allowed to delete this URL');
     }
+
+    await this.assertPasswordMatches(url, password);
 
     try {
       await this.dbService.urls.update({
@@ -238,10 +277,14 @@ export class UrlsService {
     short_code,
     new_short_code,
     userId,
+    password,
+    clearPassword,
   }: {
     short_code: string;
     new_short_code: string;
     userId: number;
+    password?: string;
+    clearPassword?: boolean;
   }): Promise<urlsModel> {
     const url = await this.dbService.urls.findFirst({
       where: { short_code, deleted_at: null },
@@ -257,14 +300,39 @@ export class UrlsService {
       throw new ForbiddenException('You are not allowed to update this URL');
     }
 
-    if (url.short_code === new_short_code) {
+    if (password && clearPassword) {
+      throw new BadRequestException(
+        'password and clearPassword cannot be used together',
+      );
+    }
+
+    const changesCode = url.short_code !== new_short_code;
+    const changesPassword = Boolean(password) || clearPassword === true;
+
+    if (!changesCode && !changesPassword) {
       return url;
+    }
+
+    const data: {
+      short_code?: string;
+      password?: string | null;
+      updated_at: Date;
+    } = { updated_at: new Date() };
+
+    if (changesCode) {
+      data.short_code = new_short_code;
+    }
+
+    if (clearPassword) {
+      data.password = null;
+    } else if (password) {
+      data.password = await hashPassword(password);
     }
 
     try {
       return await this.dbService.urls.update({
         where: { id: url.id },
-        data: { short_code: new_short_code, updated_at: new Date() },
+        data,
       });
     } catch (error) {
       if (this.isUniqueConstraintViolation(error)) {

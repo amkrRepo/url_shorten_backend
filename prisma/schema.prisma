@@ -19,6 +19,7 @@ model urls {
   user_id          Int?
   deleted_at       Boolean?
   expiry_date      DateTime? @db.Date
+  password         String?   @db.VarChar(255)
   user             users?    @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_urls_foreign_key")
 
   @@index([created_at], map: "idx_created_at")

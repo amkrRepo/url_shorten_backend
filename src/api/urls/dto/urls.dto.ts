@@ -8,6 +8,9 @@ import {
   IsArray,
   ArrayNotEmpty,
   ArrayMaxSize,
+  MinLength,
+  MaxLength,
+  IsBoolean,
 } from 'class-validator';
 
 const CUSTOM_CODE_PATTERN = /^[A-Za-z0-9_-]{3,30}$/;
@@ -30,6 +33,12 @@ export class UrlDetailsDto {
       'custom_code must be 3-30 characters long and contain only letters, numbers, "-" or "_"',
   })
   custom_code?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(6)
+  @MaxLength(72)
+  password?: string;
 }
 
 export class UpdateShortCodeDto {
@@ -39,6 +48,24 @@ export class UpdateShortCodeDto {
       'new_short_code must be 3-30 characters long and contain only letters, numbers, "-" or "_"',
   })
   new_short_code!: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(6)
+  @MaxLength(72)
+  password?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  clearPassword?: boolean;
+}
+
+export class DeleteShortCode {
+  @IsOptional()
+  @IsString()
+  @MinLength(6)
+  @MaxLength(72)
+  password?: string;
 }
 
 /**

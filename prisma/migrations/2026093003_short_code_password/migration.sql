@@ -1,0 +1,2 @@
+ALTER TABLE urls
+ADD COLUMN password VARCHAR(255);
