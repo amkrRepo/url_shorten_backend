@@ -31,6 +31,12 @@ export interface BatchShortenResult {
   successful: BatchShortenSuccess[];
   failed: BatchShortenFailure[];
 }
+
+// Password field is removed from urlsModel
+export type PublicUrl = Omit<urlsModel, 'password'> & {
+  has_password: boolean;
+};
+
 @Injectable()
 export class UrlsService {
   constructor(private readonly dbService: DbService) {}
@@ -49,6 +55,23 @@ export class UrlsService {
     }
 
     return urlDetails;
+  }
+
+  /**
+   * Lists every live (not soft-deleted) URL owned by `userId`, newest
+   * first. Expired rows are included so the owner can still see and
+   * clean them up.
+   */
+  async listUserUrls(userId: number): Promise<PublicUrl[]> {
+    const urls = await this.dbService.urls.findMany({
+      where: { user_id: userId, deleted_at: null },
+      orderBy: { created_at: 'desc' },
+    });
+
+    return urls.map(({ password: storedPassword, ...url }) => ({
+      ...url,
+      has_password: storedPassword !== null,
+    }));
   }
 
   async createShortUrl(

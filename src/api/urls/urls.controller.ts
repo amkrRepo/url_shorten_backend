@@ -62,6 +62,12 @@ export class UrlsController {
     return this.urlsService.getUrlDetails(this.requireShortCode(short_code));
   }
 
+  @Get('list')
+  @UseGuards(APIKeyGuard)
+  list(@Req() req: AuthenticatedRequest) {
+    return this.urlsService.listUserUrls(req.user.id);
+  }
+
   @Post('shorten')
   @UseGuards(APIKeyGuard)
   @HttpCode(HttpStatus.CREATED)
