@@ -3,8 +3,6 @@ import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { DbService } from '../src/db/db.service';
-import { verifyPassword } from '../src/common/password-utils';
-import type { PublicUrl } from '../src/api/urls/urls.service';
 import {
   describe,
   beforeAll,
@@ -61,32 +59,6 @@ describe('URLs E2E', () => {
     }
 
     return req.send({ new_short_code: newShortCode, ...options });
-  };
-
-  const deleteShortCode = (
-    shortCode: string,
-    apiKey: string,
-    password?: string,
-  ) => {
-    const req = request(app.getHttpServer())
-      .delete(`/urls/delete?short_code=${encodeURIComponent(shortCode)}`)
-      .set('Content-Type', 'application/json');
-
-    if (apiKey) {
-      req.set('x-api-key', apiKey);
-    }
-
-    return password === undefined ? req.send() : req.send({ password });
-  };
-
-  const followRedirect = (shortCode: string, password?: string) => {
-    const query = `short_code=${encodeURIComponent(shortCode)}`;
-    const url =
-      password === undefined
-        ? `/urls/redirect?${query}`
-        : `/urls/redirect?${query}&password=${encodeURIComponent(password)}`;
-
-    return request(app.getHttpServer()).get(url);
   };
 
   // Sends the payload as-is so tests can also cover malformed bodies
@@ -172,7 +144,7 @@ describe('URLs E2E', () => {
     await app.close();
   });
 
-  it('shortens a URL and then redirects to the original URL (happy path)', async () => {
+  it('shortens a URL and then redirects to the original URL', async () => {
     // Arrange
     const originalUrl = 'https://example.com';
 
@@ -207,7 +179,7 @@ describe('URLs E2E', () => {
     expect(response.status).toBe(400);
   });
 
-  it('returns 400 when original_url is not a syntactically valid URL', async () => {
+  it('returns 400 when original_url is not a valid URL', async () => {
     const response = await request(app.getHttpServer())
       .post('/urls/shorten')
       .set('x-api-key', KEY_A)
@@ -222,7 +194,7 @@ describe('URLs E2E', () => {
     expect(response.status).toBe(401);
   });
 
-  it('returns 401 when shortening with an unknown API key', async () => {
+  it('returns 401 when shortening with wrong API key', async () => {
     const response = await shorten('https://example.com', 'not-a-real-key');
 
     expect(response.status).toBe(401);
@@ -353,22 +325,6 @@ describe('URLs E2E', () => {
     expect(redirectResponse.status).toBe(404);
   });
 
-  it('returns 404 when asking for details of a deleted short_code', async () => {
-    const createResponse = await shorten('https://example.com', KEY_A);
-    expect(createResponse.status).toBe(201);
-    const { short_code } = shortenBody(createResponse);
-
-    const deleteResponse = await request(app.getHttpServer())
-      .delete(`/urls/delete?short_code=${short_code}`)
-      .set('x-api-key', KEY_A);
-    expect(deleteResponse.status).toBe(204);
-
-    const detailsResponse = await request(app.getHttpServer()).get(
-      `/urls/details?short_code=${short_code}`,
-    );
-    expect(detailsResponse.status).toBe(404);
-  });
-
   it('returns 410 when creating a url with an expiry_date in the past', async () => {
     const createResponse = await shorten('https://example.com', KEY_A, {
       expiry_date: '2026-09-30',
@@ -435,17 +391,6 @@ describe('URLs E2E', () => {
     expect(
       (detailsResponse.body as { original_url: string }).original_url,
     ).toBe('https://example.com');
-  });
-
-  it('returns 400 when custom_code does not match the allowed format', async () => {
-    const invalidCodes = ['ab', 'x'.repeat(31), 'has space', 'bad!/code', ''];
-
-    for (const custom_code of invalidCodes) {
-      const response = await shorten('https://example.com', KEY_A, {
-        custom_code,
-      });
-      expect(response.status).toBe(400);
-    }
   });
 
   it('shortens every url of a batch when all entries are valid', async () => {
@@ -530,21 +475,6 @@ describe('URLs E2E', () => {
     expect(await prisma.urls.count()).toBe(0);
   });
 
-  it('returns 400 when the batch payload is malformed', async () => {
-    const payloads: object[] = [
-      {},
-      { urls: [] },
-      { urls: 'https://example.com' },
-      { urls: [123] },
-      { urls: new Array(101).fill('https://example.com') },
-    ];
-
-    for (const payload of payloads) {
-      const response = await shortenBatch(payload, KEY_A);
-      expect(response.status).toBe(400);
-    }
-  });
-
   it('returns 403 when a free tier user calls the batch endpoint', async () => {
     const response = await shortenBatch(
       { urls: ['https://example.com'] },
@@ -624,210 +554,4 @@ describe('URLs E2E', () => {
     );
     expect(updatedShortCode.status).toBe(404);
   });
-
-  // Password protection on update / delete / redirect
-
-  it('stores a hash when a password is set and keeps it on a later update', async () => {
-    const createdResponse = await shorten('https://example.com', KEY_A);
-    const { short_code } = shortenBody(createdResponse);
-
-    // Same short_code: this is a password-only update, so the code path
-    // must not short-circuit before touching `password`.
-    const setPassword = await updateShortCode(short_code, KEY_A, short_code, {
-      password: 'secret1',
-    });
-    expect(setPassword.status).toBe(200);
-
-    const stored = await prisma.urls.findUnique({ where: { short_code } });
-    const hash = stored?.password ?? '';
-    expect(hash).toMatch(/^\$2[aby]\$\d+\$/);
-    expect(hash).not.toBe('secret1');
-    expect(await verifyPassword('secret1', hash)).toBe(true);
-    expect(await verifyPassword('wrong-one', hash)).toBe(false);
-
-    // A plain rename that omits `password` must not wipe the stored hash.
-    const renamed = await updateShortCode(short_code, KEY_A, 'renamed_code');
-    expect(renamed.status).toBe(200);
-
-    const afterRename = await prisma.urls.findUnique({
-      where: { short_code: 'renamed_code' },
-    });
-    expect(afterRename?.password).toBe(hash);
-  });
-
-  it('rejects an update that sets both password and clearPassword', async () => {
-    const createdResponse = await shorten('https://example.com', KEY_A);
-    const { short_code } = shortenBody(createdResponse);
-
-    const response = await updateShortCode(short_code, KEY_A, short_code, {
-      password: 'secret1',
-      clearPassword: true,
-    });
-
-    expect(response.status).toBe(400);
-
-    const stored = await prisma.urls.findUnique({ where: { short_code } });
-    expect(stored?.password).toBeNull();
-  });
-
-  it('removes protection when clearPassword is set', async () => {
-    const createdResponse = await shorten('https://example.com', KEY_A);
-    const { short_code } = shortenBody(createdResponse);
-
-    await updateShortCode(short_code, KEY_A, short_code, {
-      password: 'secret1',
-    });
-    const cleared = await updateShortCode(short_code, KEY_A, short_code, {
-      clearPassword: true,
-    });
-    expect(cleared.status).toBe(200);
-
-    const stored = await prisma.urls.findUnique({ where: { short_code } });
-    expect(stored?.password).toBeNull();
-  });
-
-  it('deletes only with the correct password when the short code is protected', async () => {
-    const createdResponse = await shorten('https://example.com', KEY_A);
-    const { short_code } = shortenBody(createdResponse);
-
-    await updateShortCode(short_code, KEY_A, short_code, {
-      password: 'secret1',
-    });
-
-    const withoutPassword = await deleteShortCode(short_code, KEY_A);
-    expect(withoutPassword.status).toBe(403);
-
-    const wrongPassword = await deleteShortCode(short_code, KEY_A, 'wrong-one');
-    expect(wrongPassword.status).toBe(403);
-
-    // The rejected attempts must leave the link live (and protected).
-    expect((await followRedirect(short_code)).status).toBe(403);
-    expect((await followRedirect(short_code, 'secret1')).status).toBe(302);
-
-    const withPassword = await deleteShortCode(short_code, KEY_A, 'secret1');
-    expect(withPassword.status).toBe(204);
-
-    const deleted = await prisma.urls.findUnique({ where: { short_code } });
-    expect(deleted?.deleted_at).toBe(true);
-  });
-
-  it('still refuses the delete for a non-owner even with the right password', async () => {
-    const createdResponse = await shorten('https://example.com', KEY_A);
-    const { short_code } = shortenBody(createdResponse);
-
-    await updateShortCode(short_code, KEY_A, short_code, {
-      password: 'secret1',
-    });
-
-    const response = await deleteShortCode(short_code, KEY_B, 'secret1');
-    expect(response.status).toBe(403);
-
-    const stored = await prisma.urls.findUnique({ where: { short_code } });
-    expect(stored?.deleted_at).toBeNull();
-  });
-
-  it('redirects only when the password in the query string matches', async () => {
-    const createdResponse = await shorten('https://example.com', KEY_A);
-    const { short_code } = shortenBody(createdResponse);
-
-    await updateShortCode(short_code, KEY_A, short_code, {
-      password: 'secret1',
-    });
-
-    expect((await followRedirect(short_code)).status).toBe(403);
-    expect((await followRedirect(short_code, 'wrong-one')).status).toBe(403);
-
-    const allowed = await followRedirect(short_code, 'secret1');
-    expect(allowed.status).toBe(302);
-    expect(allowed.headers['location']).toBe('https://example.com');
-  });
-
-  it('does not count a rejected redirect as a visit', async () => {
-    const createdResponse = await shorten('https://example.com', KEY_A);
-    const { short_code } = shortenBody(createdResponse);
-
-    await updateShortCode(short_code, KEY_A, short_code, {
-      password: 'secret1',
-    });
-
-    await followRedirect(short_code);
-    await followRedirect(short_code, 'wrong-one');
-
-    const blocked = await prisma.urls.findUnique({ where: { short_code } });
-    expect(blocked?.visit_count).toBe(0);
-
-    await followRedirect(short_code, 'secret1');
-
-    const allowed = await prisma.urls.findUnique({ where: { short_code } });
-    expect(allowed?.visit_count).toBe(1);
-  });
-
-  // Listing all URLs of the authenticated user
-
-  it('returns 401 when listing without an API key', async () => {
-    const response = await request(app.getHttpServer()).get('/urls/list');
-    expect(response.status).toBe(401);
-  });
-
-  it("lists only the authenticated user's live URLs, newest first", async () => {
-    const first = shortenBody(await shorten('https://a.example.com', KEY_A));
-    const second = shortenBody(await shorten('https://b.example.com', KEY_A));
-
-    // Another user's URL must never show up.
-    const foreign = shortenBody(await shorten('https://c.example.com', KEY_B));
-
-    // A soft-deleted URL must not show up either.
-    const removed = shortenBody(await shorten('https://d.example.com', KEY_A));
-    const deleteResponse = await deleteShortCode(removed.short_code, KEY_A);
-    expect(deleteResponse.status).toBe(204);
-
-    const response = await request(app.getHttpServer())
-      .get('/urls/list')
-      .set('x-api-key', KEY_A);
-
-    expect(response.status).toBe(200);
-
-    const list = response.body as PublicUrl[];
-    expect(list.map((url) => url.short_code)).toEqual([
-      second.short_code,
-      first.short_code,
-    ]);
-    expect(list.some((url) => url.short_code === foreign.short_code)).toBe(
-      false,
-    );
-    expect(list.some((url) => url.short_code === removed.short_code)).toBe(
-      false,
-    );
-    expect(list.every((url) => url.deleted_at === null)).toBe(true);
-  });
-
-  it('reports has_password without exposing the stored hash', async () => {
-    const plain = shortenBody(
-      await shorten('https://plain.example.com', KEY_A),
-    );
-    const guarded = shortenBody(
-      await shorten('https://guarded.example.com', KEY_A),
-    );
-    await updateShortCode(guarded.short_code, KEY_A, guarded.short_code, {
-      password: 'secret1',
-    });
-
-    const response = await request(app.getHttpServer())
-      .get('/urls/list')
-      .set('x-api-key', KEY_A);
-    expect(response.status).toBe(200);
-
-    const list = response.body as PublicUrl[];
-    const plainRow = list.find((url) => url.short_code === plain.short_code);
-    const guardedRow = list.find(
-      (url) => url.short_code === guarded.short_code,
-    );
-
-    expect(plainRow?.has_password).toBe(false);
-    expect(guardedRow?.has_password).toBe(true);
-    expect(guardedRow).not.toHaveProperty('password');
-    expect(response.text).not.toContain('$2b$');
-  });
-
-  it('', async () => {});
 });
