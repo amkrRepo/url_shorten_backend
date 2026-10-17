@@ -34,3 +34,14 @@ model users {
   tier       String?   @default("free") @db.VarChar(255)
   urls       urls[]
 }
+
+model request_logs {
+  id          Int      @id @default(autoincrement())
+  time_stamp  DateTime @default(now()) @db.Timestamp(6)
+  http_method String   @db.VarChar(10)
+  url         String
+  user_agent  String?
+  ip          String   @db.VarChar(75)
+
+  @@index([time_stamp], map: "idx_request_time_logs")
+}
