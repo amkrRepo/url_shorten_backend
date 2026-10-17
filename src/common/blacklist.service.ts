@@ -10,58 +10,25 @@ export class BlacklistService {
     join(process.cwd(), 'config', 'blacklist.json');
 
   private blockedKeys = new Set<string>();
-  private lastMtimeMs = -1;
-  private missingLogged = false;
+  private lastModified = 0;
 
   isBlocked(apiKey: string): boolean {
-    this.refreshIfChanged();
-
+    this.reloadIfChanged();
     return this.blockedKeys.has(apiKey);
   }
 
-  private refreshIfChanged(): void {
-    let mtimeMs: number;
-
+  private reloadIfChanged() {
     try {
-      mtimeMs = statSync(this.filePath).mtimeMs;
+      const mtime = statSync(this.filePath).mtimeMs;
+      if (mtime === this.lastModified) return; // file unchanged, use cache
+
+      const data = JSON.parse(readFileSync(this.filePath, 'utf-8'));
+      this.blockedKeys = new Set(data.blockedKeys ?? []);
+      this.lastModified = mtime;
+      this.logger.log(`Blacklist reloaded: ${this.blockedKeys.size} keys`);
     } catch (err) {
-      // Log once per outage, not on every request, and keep the last list.
-      if (!this.missingLogged) {
-        this.logger.error(
-          `Cannot read blacklist file ${this.filePath}: ${(err as Error).message}`,
-        );
-        this.missingLogged = true;
-      }
-
-      return;
-    }
-
-    this.missingLogged = false;
-
-    if (mtimeMs === this.lastMtimeMs) {
-      return;
-    }
-
-    // Record the mtime even when parsing fails, so a broken file is
-    // reported once instead of being re-parsed on every request.
-    this.lastMtimeMs = mtimeMs;
-
-    try {
-      const parsed: unknown = JSON.parse(readFileSync(this.filePath, 'utf8'));
-      const keys = (parsed as { blockedKeys?: unknown })?.blockedKeys;
-
-      if (
-        !Array.isArray(keys) ||
-        !keys.every((key) => typeof key === 'string')
-      ) {
-        throw new Error('"blockedKeys" must be an array of strings');
-      }
-
-      this.blockedKeys = new Set(keys as string[]);
-    } catch (err) {
-      this.logger.error(
-        `Invalid blacklist file ${this.filePath}, keeping last known list: ${(err as Error).message}`,
-      );
+      // missing or invalid file: keep the last known list instead of crashing
+      this.logger.error(`Could not load blacklist: ${(err as Error).message}`);
     }
   }
 }
