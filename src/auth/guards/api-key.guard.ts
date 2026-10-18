@@ -4,9 +4,11 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
+import * as Sentry from '@sentry/nestjs';
 import { Request } from 'express';
 import { users } from 'generated/prisma/browser';
 import { UserService } from '../../api/user/user.service';
+import { toSentryUser } from '../../common/observability.middleware';
 
 export interface AuthenticatedRequest extends Request {
   user: users;
@@ -31,6 +33,7 @@ export class APIKeyGuard implements CanActivate {
     }
 
     req.user = user;
+    Sentry.setUser(toSentryUser(user));
 
     return true;
   }
