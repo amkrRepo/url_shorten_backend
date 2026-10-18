@@ -1,11 +1,13 @@
 import { Injectable, NestMiddleware } from '@nestjs/common';
 import type { NextFunction, Request, Response } from 'express';
 import { BlacklistService } from './blacklist.service';
+import { TimeMiddleware } from './timed-middleware.decorator';
 
 @Injectable()
 export class BlacklistMiddleware implements NestMiddleware {
   constructor(private readonly blacklistService: BlacklistService) {}
 
+  @TimeMiddleware()
   use(req: Request, res: Response, next: NextFunction) {
     const apiKey = req.headers['x-api-key'];
 

@@ -13,6 +13,7 @@ import { HealthModule } from './health/health.module';
 import { RequestLoggerMiddleware } from './common/request-logger.middleware';
 import { BlacklistService } from './common/blacklist.service';
 import { BlacklistMiddleware } from './common/blacklist.middleware';
+import { ResponseTimeMiddleware } from './common/response-time.middleware';
 
 @Module({
   imports: [UrlsModule, DbModule, UserModule, HealthModule],
@@ -28,5 +29,7 @@ export class AppModule implements NestModule {
       .apply(RequestLoggerMiddleware)
       .exclude({ path: 'health', method: RequestMethod.GET })
       .forRoutes('urls', 'user');
+
+    consumer.apply(ResponseTimeMiddleware).forRoutes('*');
   }
 }
