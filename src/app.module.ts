@@ -17,6 +17,7 @@ import { BlacklistService } from './common/blacklist.service';
 import { BlacklistMiddleware } from './common/blacklist.middleware';
 import { ResponseTimeMiddleware } from './common/response-time.middleware';
 import { ObservabilityMiddleware } from './common/observability.middleware';
+import { UrlsV1Controller, UrlsV2Controller } from './api/urls/urls.controller';
 
 @Module({
   imports: [
@@ -41,7 +42,7 @@ export class AppModule implements NestModule {
     consumer
       .apply(RequestLoggerMiddleware)
       .exclude({ path: 'health', method: RequestMethod.GET })
-      .forRoutes('urls', 'user');
+      .forRoutes(UrlsV1Controller, UrlsV2Controller, 'user');
 
     consumer.apply(ResponseTimeMiddleware).forRoutes('*');
 

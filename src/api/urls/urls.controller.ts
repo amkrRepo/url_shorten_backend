@@ -6,6 +6,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Injectable,
   Patch,
   Post,
   Query,
@@ -24,9 +25,12 @@ import type { Response } from 'express';
 import { APIKeyGuard } from '../../auth/guards/api-key.guard';
 import type { AuthenticatedRequest } from '../../auth/guards/api-key.guard';
 import { TierGuard } from '../../auth/guards/tier.guard';
-@Controller('urls')
-export class UrlsController {
-  constructor(private readonly urlsService: UrlsService) {}
+
+// @Injectable() makes TS emit the constructor's param types; without a
+// decorator here the v1/v2 subclasses get no UrlsService injected.
+@Injectable()
+abstract class UrlsController {
+  constructor(readonly urlsService: UrlsService) {}
 
   /**
    * `?short_code=a&short_code=b` (or a missing param) makes Express give
@@ -34,7 +38,7 @@ export class UrlsController {
    * validation error that would surface as a 500. Normalize it to a
    * 400 here instead.
    */
-  private requireShortCode(short_code: string | string[]): string {
+  requireShortCode(short_code: string | string[]): string {
     if (typeof short_code !== 'string' || short_code.length === 0) {
       throw new BadRequestException('short_code query parameter is required');
     }
@@ -68,20 +72,6 @@ export class UrlsController {
     return this.urlsService.listUserUrls(req.user.id);
   }
 
-  @Post('shorten')
-  @UseGuards(APIKeyGuard)
-  @HttpCode(HttpStatus.CREATED)
-  shorten(@Body() dto: UrlDetailsDto, @Req() req: AuthenticatedRequest) {
-    return this.urlsService.createShortUrl(dto, req.user.id);
-  }
-
-  @Post('shorten/batch')
-  @UseGuards(APIKeyGuard, TierGuard)
-  @HttpCode(207)
-  shortenBatch(@Body() dto: BatchShortenDto, @Req() req: AuthenticatedRequest) {
-    return this.urlsService.createShortUrlsBatch(dto.urls, req.user.id);
-  }
-
   @Get('redirect')
   @HttpCode(HttpStatus.PERMANENT_REDIRECT)
   async redirect(
@@ -97,6 +87,35 @@ export class UrlsController {
     );
 
     res.redirect(HttpStatus.FOUND, url.original_url);
+  }
+}
+
+// Controller for v1.
+@Controller({ path: 'urls', version: '1' })
+export class UrlsV1Controller extends UrlsController {
+  @Post('shorten')
+  @HttpCode(HttpStatus.CREATED)
+  async shorten(@Body() dto: UrlDetailsDto) {
+    return this.urlsService.createShortUrl(dto);
+  }
+}
+
+// Controller for v2.
+
+@Controller({ path: 'urls', version: '2' })
+export class UrlsV2Controller extends UrlsController {
+  @Post('shorten')
+  @UseGuards(APIKeyGuard)
+  @HttpCode(HttpStatus.CREATED)
+  shorten(@Body() dto: UrlDetailsDto, @Req() req: AuthenticatedRequest) {
+    return this.urlsService.createShortUrl(dto, req.user.id);
+  }
+
+  @Post('shorten/batch')
+  @UseGuards(APIKeyGuard, TierGuard)
+  @HttpCode(207)
+  shortenBatch(@Body() dto: BatchShortenDto, @Req() req: AuthenticatedRequest) {
+    return this.urlsService.createShortUrlsBatch(dto.urls, req.user.id);
   }
 
   @Delete('delete')

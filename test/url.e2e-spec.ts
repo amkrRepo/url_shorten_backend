@@ -1,4 +1,9 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import {
+  INestApplication,
+  RequestMethod,
+  ValidationPipe,
+  VersioningType,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
@@ -19,6 +24,9 @@ describe('URLs E2E', () => {
   const KEY_A = 'a'.repeat(64);
   const KEY_B = 'b'.repeat(64);
 
+  const V1 = '/api/v1/urls';
+  const V2 = '/api/v2/urls';
+
   interface ShortenBody {
     id: number;
     short_code: string;
@@ -36,7 +44,7 @@ describe('URLs E2E', () => {
     options: { expiry_date?: string; custom_code?: string } = {},
   ) => {
     const req = request(app.getHttpServer())
-      .post('/urls/shorten')
+      .post(`${V2}/shorten`)
       .set('Content-Type', 'application/json');
     if (apiKey) {
       req.set('x-api-key', apiKey);
@@ -51,7 +59,7 @@ describe('URLs E2E', () => {
     options: { password?: string; clearPassword?: boolean } = {},
   ) => {
     const req = request(app.getHttpServer())
-      .patch(`/urls/update?short_code=${encodeURIComponent(shortCode)}`)
+      .patch(`${V2}/update?short_code=${encodeURIComponent(shortCode)}`)
       .set('Content-Type', 'application/json');
 
     if (apiKey) {
@@ -66,7 +74,7 @@ describe('URLs E2E', () => {
   // because superagent's send() only accepts `string | object`.
   const shortenBatch = (payload: object, apiKey?: string) => {
     const req = request(app.getHttpServer())
-      .post('/urls/shorten/batch')
+      .post(`${V2}/shorten/batch`)
       .set('Content-Type', 'application/json');
     if (apiKey) {
       req.set('x-api-key', apiKey);
@@ -94,8 +102,16 @@ describe('URLs E2E', () => {
 
     app = moduleFixture.createNestApplication();
 
-    // Mirror the global pipe registered in main.ts so validation
-    // behaves identically to the real running app.
+    // Mirror the prefix, versioning and global pipe from main.ts so routing
+    // and validation behave identically to the real running app.
+    app.setGlobalPrefix('api', {
+      exclude: [
+        { path: '/', method: RequestMethod.GET },
+        { path: '/health', method: RequestMethod.GET },
+      ],
+    });
+    app.enableVersioning({ type: VersioningType.URI });
+
     app.useGlobalPipes(
       new ValidationPipe({
         whitelist: true,
@@ -109,7 +125,7 @@ describe('URLs E2E', () => {
     prisma = moduleFixture.get<DbService>(DbService);
 
     // Two owners so tests can cover the 403 (wrong API key) path.
-    // KEY_A is enterprise: /urls/shorten/batch is gated by TierGuard, so the
+    // KEY_A is enterprise: /api/v2/urls/shorten/batch is gated by TierGuard, so the
     // happy-path batch cases need an enterprise caller. KEY_B stays free.
     await prisma.users.upsert({
       where: { email: 'user1@example.com' },
@@ -162,7 +178,7 @@ describe('URLs E2E', () => {
 
     // Act: follow the short_code via the redirect endpoint
     const redirectResponse = await request(app.getHttpServer()).get(
-      `/urls/redirect?short_code=${short_code}`,
+      `${V2}/redirect?short_code=${short_code}`,
     );
 
     // Assert: a real 302 redirect pointing at the original URL
@@ -172,7 +188,7 @@ describe('URLs E2E', () => {
 
   it('returns 400 when original_url is missing from the request body', async () => {
     const response = await request(app.getHttpServer())
-      .post('/urls/shorten')
+      .post(`${V2}/shorten`)
       .set('x-api-key', KEY_A)
       .send({});
 
@@ -181,7 +197,7 @@ describe('URLs E2E', () => {
 
   it('returns 400 when original_url is not a valid URL', async () => {
     const response = await request(app.getHttpServer())
-      .post('/urls/shorten')
+      .post(`${V2}/shorten`)
       .set('x-api-key', KEY_A)
       .send({ original_url: 'not-a-url' });
 
@@ -202,7 +218,7 @@ describe('URLs E2E', () => {
 
   it('returns 404 when redirecting with a short_code that does not exist', async () => {
     const response = await request(app.getHttpServer()).get(
-      '/urls/redirect?short_code=doesnotexist',
+      `${V2}/redirect?short_code=doesnotexist`,
     );
 
     expect(response.status).toBe(404);
@@ -230,13 +246,13 @@ describe('URLs E2E', () => {
   });
 
   it('returns 400 when the short_code query parameter is missing entirely', async () => {
-    const response = await request(app.getHttpServer()).get('/urls/redirect');
+    const response = await request(app.getHttpServer()).get(`${V2}/redirect`);
     expect(response.status).toBe(400);
   });
 
   it('returns 400 when the short_code query parameter is an empty string', async () => {
     const response = await request(app.getHttpServer()).get(
-      '/urls/redirect?short_code=',
+      `${V2}/redirect?short_code=`,
     );
     expect(response.status).toBe(400);
   });
@@ -272,21 +288,21 @@ describe('URLs E2E', () => {
     const { short_code } = shortenBody(createResponse);
 
     const response = await request(app.getHttpServer())
-      .delete(`/urls/delete?short_code=${short_code}`)
+      .delete(`${V2}/delete?short_code=${short_code}`)
       .set('x-api-key', KEY_B);
 
     expect(response.status).toBe(403);
 
     // The URL must still be live after the rejected attempt.
     const redirectResponse = await request(app.getHttpServer()).get(
-      `/urls/redirect?short_code=${short_code}`,
+      `${V2}/redirect?short_code=${short_code}`,
     );
     expect(redirectResponse.status).toBe(302);
   });
 
   it('returns 404 when deleting a short_code that does not exist', async () => {
     const response = await request(app.getHttpServer())
-      .delete('/urls/delete?short_code=doesnotexist')
+      .delete(`${V2}/delete?short_code=doesnotexist`)
       .set('x-api-key', KEY_A);
 
     expect(response.status).toBe(404);
@@ -298,12 +314,12 @@ describe('URLs E2E', () => {
     const { short_code } = shortenBody(createResponse);
 
     const firstDelete = await request(app.getHttpServer())
-      .delete(`/urls/delete?short_code=${short_code}`)
+      .delete(`${V2}/delete?short_code=${short_code}`)
       .set('x-api-key', KEY_A);
     expect(firstDelete.status).toBe(204);
 
     const secondDelete = await request(app.getHttpServer())
-      .delete(`/urls/delete?short_code=${short_code}`)
+      .delete(`${V2}/delete?short_code=${short_code}`)
       .set('x-api-key', KEY_A);
     expect(secondDelete.status).toBe(404);
     expect((secondDelete.body as { error: string }).error).toBe('Not Found');
@@ -315,12 +331,12 @@ describe('URLs E2E', () => {
     const { short_code } = shortenBody(createResponse);
 
     const deleteResponse = await request(app.getHttpServer())
-      .delete(`/urls/delete?short_code=${short_code}`)
+      .delete(`${V2}/delete?short_code=${short_code}`)
       .set('x-api-key', KEY_A);
     expect(deleteResponse.status).toBe(204);
 
     const redirectResponse = await request(app.getHttpServer()).get(
-      `/urls/redirect?short_code=${short_code}`,
+      `${V2}/redirect?short_code=${short_code}`,
     );
     expect(redirectResponse.status).toBe(404);
   });
@@ -344,12 +360,12 @@ describe('URLs E2E', () => {
     });
 
     const detailsResponse = await request(app.getHttpServer()).get(
-      `/urls/details?short_code=${expired.short_code}`,
+      `${V2}/details?short_code=${expired.short_code}`,
     );
     expect(detailsResponse.status).toBe(410);
 
     const redirectResponse = await request(app.getHttpServer()).get(
-      `/urls/redirect?short_code=${expired.short_code}`,
+      `${V2}/redirect?short_code=${expired.short_code}`,
     );
     expect(redirectResponse.status).toBe(410);
   });
@@ -365,7 +381,7 @@ describe('URLs E2E', () => {
 
     // The requested code is usable immediately, just like a generated one.
     const redirectResponse = await request(app.getHttpServer()).get(
-      '/urls/redirect?short_code=awesome-article',
+      `${V2}/redirect?short_code=awesome-article`,
     );
     expect(redirectResponse.status).toBe(302);
     expect(redirectResponse.headers['location']).toBe('https://example.com');
@@ -385,7 +401,7 @@ describe('URLs E2E', () => {
 
     // The first url keeps the code and its original target.
     const detailsResponse = await request(app.getHttpServer()).get(
-      '/urls/details?short_code=taken-code',
+      `${V2}/details?short_code=taken-code`,
     );
     expect(detailsResponse.status).toBe(202);
     expect(
@@ -420,7 +436,7 @@ describe('URLs E2E', () => {
 
     // Codes returned by the batch behave like any other short code.
     const redirectResponse = await request(app.getHttpServer()).get(
-      `/urls/redirect?short_code=${batch.successful[0].short_code}`,
+      `${V2}/redirect?short_code=${batch.successful[0].short_code}`,
     );
     expect(redirectResponse.status).toBe(302);
     expect(redirectResponse.headers['location']).toBe('https://example.com/a');
@@ -528,18 +544,18 @@ describe('URLs E2E', () => {
     // The URL must keep its original short_code and still be live after
     // the rejected attempt.
     const redirectResponse = await request(app.getHttpServer()).get(
-      `/urls/redirect?short_code=${short_code}`,
+      `${V2}/redirect?short_code=${short_code}`,
     );
     // means: the original short_code still exists in the DB and still points at https://example.com.
     expect(redirectResponse.status).toBe(302);
 
     const detailsResponse = await request(app.getHttpServer()).get(
-      `/urls/details?short_code=${short_code}`,
+      `${V2}/details?short_code=${short_code}`,
     );
     // returns 202 with the row's data when the code exists and isn't deleted/short-circuited.
     expect(detailsResponse.status).toBe(202);
     const hijackRedirect = await request(app.getHttpServer()).get(
-      '/urls/redirect?short_code=hijacked_code',
+      `${V2}/redirect?short_code=hijacked_code`,
     );
     // If the hijack had (wrongly) worked, the row's short_code would now be hijacked_code,
     // this lookup would find nothing, and you'd get a 404 instead.
@@ -553,5 +569,33 @@ describe('URLs E2E', () => {
       'updated_code',
     );
     expect(updatedShortCode.status).toBe(404);
+  });
+
+  // Tests for v1: shorten has no API key guard and stores no owner.
+
+  it('shortens on v1 without an API key and redirects to the original URL', async () => {
+    const createResponse = await request(app.getHttpServer())
+      .post(`${V1}/shorten`)
+      .send({ original_url: 'https://example.com/v1' });
+
+    expect(createResponse.status).toBe(201);
+    const created = createResponse.body as ShortenBody & {
+      user_id: number | null;
+    };
+    expect(created.user_id).toBeNull();
+
+    const redirectResponse = await request(app.getHttpServer()).get(
+      `${V1}/redirect?short_code=${created.short_code}`,
+    );
+    expect(redirectResponse.status).toBe(302);
+    expect(redirectResponse.headers['location']).toBe('https://example.com/v1');
+  });
+
+  it('returns 400 on v1 shorten when original_url is not a valid URL', async () => {
+    const response = await request(app.getHttpServer())
+      .post(`${V1}/shorten`)
+      .send({ original_url: 'not-a-url' });
+
+    expect(response.status).toBe(400);
   });
 });
