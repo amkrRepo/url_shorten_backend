@@ -1,0 +1,11 @@
+$kind: collection
+description: |-
+  REST API for the URL shortener (v2).
+
+  - v2 needs an api-key: send it in the `x-api-key` header (set the `apiKey` variable).
+  - Create a user first with "Create user", then use the same api_key here.
+  - Batch shorten works only for the enterprise tier, upgrade with "Upgrade tier".
+  - v1 is deprecated and will be removed on 2027-01-31, see MIGRATION.md.
+variables:
+  baseUrl: http://localhost:3000
+  apiKey: your-api-key

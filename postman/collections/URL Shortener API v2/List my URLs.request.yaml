@@ -1,0 +1,9 @@
+$kind: http-request
+name: 'List my URLs'
+url: '{{baseUrl}}/api/v2/urls/list'
+method: GET
+headers:
+  - key: x-api-key
+    value: '{{apiKey}}'
+description: 'Lists the urls that belong to the api-key user. 401 for a missing or invalid key.'
+order: 7000

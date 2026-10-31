@@ -1,0 +1,21 @@
+$kind: http-request
+name: 'Batch shorten'
+url: '{{baseUrl}}/api/v2/urls/shorten/batch'
+method: POST
+headers:
+  - key: x-api-key
+    value: '{{apiKey}}'
+  - key: Content-Type
+    value: 'application/json'
+body:
+  type: json
+  content: |-
+    {
+      "urls": [
+        "https://example.com/a",
+        "https://example.com/b",
+        "https://example.com/c"
+      ]
+    }
+description: 'Shortens up to 100 urls at once. Enterprise tier only, a free user gets 403 "Upgrade to enterprise".'
+order: 4000

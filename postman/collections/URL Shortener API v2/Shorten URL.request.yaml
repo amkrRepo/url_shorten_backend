@@ -1,0 +1,20 @@
+$kind: http-request
+url: "{{baseUrl}}/api/v2/urls/shorten"
+method: POST
+headers:
+  x-api-key: "{{apiKey}}"
+  Content-Type: application/json
+queryParams:
+  - key: api-key
+    value: aditiA
+    disabled: true
+    description: ""
+body:
+  type: json
+  content: |-
+    {
+      "original_url": "https://example.com/blog",
+      "custom_code": "my-blog"
+    }
+description: custom_code must be 3-30 characters of letters, numbers, "-" or "_". 409 if it is already taken.
+order: 3000

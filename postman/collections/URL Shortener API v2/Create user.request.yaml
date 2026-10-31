@@ -1,0 +1,15 @@
+$kind: http-request
+url: "{{baseUrl}}/api/user/create"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: json
+  content: |-
+    {
+      "email": "ravi@example.com",
+      "name": "Ravi",
+      "api_key": "ravi-key-123"
+    }
+description: Creates a user. The api_key you send here is what you use in the x-api-key header. 400 if the email is invalid.
+order: 1000

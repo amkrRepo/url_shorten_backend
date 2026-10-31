@@ -1,0 +1,7 @@
+$kind: http-request
+url: "{{baseUrl}}/api/v2/urls/redirect?short_code=my-blog"
+method: GET
+description: Redirects (302) to the original url. Turn off "Automatically follow redirects" in Postman settings to see the Location header.
+queryParams:
+  short_code: my-blog
+order: 6000

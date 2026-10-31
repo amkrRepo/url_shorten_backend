@@ -1,0 +1,14 @@
+$kind: http-request
+url: "{{baseUrl}}/api/user/tier"
+method: PATCH
+headers:
+  Content-Type: application/json
+body:
+  type: json
+  content: |-
+    {
+      "email": "user@example.com",
+      "tier": "enterprise"
+    }
+description: Upgrades a user from free to enterprise. Only "enterprise" is accepted, anything else is a 400.
+order: 2000

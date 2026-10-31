@@ -1,0 +1,9 @@
+$kind: http-request
+url: "{{baseUrl}}/api/v2/urls/delete?short_code=my-new-blog"
+method: DELETE
+headers:
+  x-api-key: "{{apiKey}}"
+description: Deletes a short_code you own. Returns 204.
+queryParams:
+  short_code: my-new-blog
+order: 9000

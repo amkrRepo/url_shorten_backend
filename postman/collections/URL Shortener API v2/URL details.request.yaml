@@ -1,0 +1,7 @@
+$kind: http-request
+url: "{{baseUrl}}/api/v2/urls/details?short_code=my-blog"
+method: GET
+description: Returns the details of a short_code. No api-key needed. 404 if it does not exist, 410 if expired.
+queryParams:
+  short_code: my-blog
+order: 5000

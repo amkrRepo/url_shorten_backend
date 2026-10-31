@@ -1,0 +1,16 @@
+$kind: http-request
+url: "{{baseUrl}}/api/v2/urls/update?short_code=my-blog"
+method: PATCH
+headers:
+  x-api-key: "{{apiKey}}"
+  Content-Type: application/json
+queryParams:
+  short_code: my-blog
+body:
+  type: json
+  content: |-
+    {
+      "new_short_code": "my-new-blog"
+    }
+description: Renames a short_code you own. 409 if the new code is taken, 403 if it is not yours.
+order: 8000
