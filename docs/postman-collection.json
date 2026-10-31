@@ -1,0 +1,351 @@
+{
+  "info": {
+    "name": "URL Shortener API v2",
+    "description": "REST API for the URL shortener (v2).\n\n- v2 needs an api-key: send it in the `x-api-key` header (set the `apiKey` variable).\n- Create a user first with \"Create user\", then use the same api_key here.\n- Batch shorten works only for the enterprise tier, upgrade with \"Upgrade tier\".\n- v1 is deprecated and will be removed on 2027-01-31, see MIGRATION.md.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Create user",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/user/create",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+          "user",
+            "create"
+          ]
+        },
+        "description": "Creates a user. The api_key you send here is what you use in the x-api-key header. 400 if the email is invalid.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"aman@example.com\",\n  \"name\": \"Aman\",\n  \"api_key\": \"aman-key-123\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Upgrade tier",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/user/tier",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+          "user",
+            "tier"
+          ]
+        },
+        "description": "Upgrades a user from free to enterprise. Only \"enterprise\" is accepted, anything else is a 400.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"aman@example.com\",\n  \"tier\": \"enterprise\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Shorten URL",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/v2/urls/shorten",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "v2",
+            "urls",
+            "shorten"
+          ]
+        },
+        "description": "custom_code must be 3-30 characters of letters, numbers, \"-\" or \"_\". 409 if it is already taken.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"original_url\": \"https://example.com/blog\",\n  \"custom_code\": \"my-blog\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Batch shorten",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/v2/urls/shorten/batch",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "v2",
+            "urls",
+            "shorten",
+            "batch"
+          ]
+        },
+        "description": "Shortens up to 100 urls at once. Enterprise tier only, a free user gets 403 \"Upgrade to enterprise\".",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"urls\": [\n    \"https://example.com/a\",\n    \"https://example.com/b\",\n    \"https://example.com/c\"\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "URL details",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/v2/urls/details?short_code=my-blog",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "v2",
+            "urls",
+            "details"
+          ],
+          "query": [
+            {
+              "key": "short_code",
+              "value": "my-blog"
+            }
+          ]
+        },
+        "description": "Returns the details of a short_code. No api-key needed. 404 if it does not exist, 410 if expired."
+      },
+      "response": []
+    },
+    {
+      "name": "Redirect",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/v2/urls/redirect?short_code=my-blog",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "v2",
+            "urls",
+            "redirect"
+          ],
+          "query": [
+            {
+              "key": "short_code",
+              "value": "my-blog"
+            }
+          ]
+        },
+        "description": "Redirects (302) to the original url. Turn off \"Automatically follow redirects\" in Postman settings to see the Location header."
+      },
+      "response": []
+    },
+    {
+      "name": "List my URLs",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/v2/urls/list",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "v2",
+            "urls",
+            "list"
+          ]
+        },
+        "description": "Lists the urls that belong to the api-key user. 401 for a missing or invalid key."
+      },
+      "response": []
+    },
+    {
+      "name": "Update short code",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/v2/urls/update?short_code=my-blog",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "v2",
+            "urls",
+            "update"
+          ],
+          "query": [
+            {
+              "key": "short_code",
+              "value": "my-blog"
+            }
+          ]
+        },
+        "description": "Renames a short_code you own. 409 if the new code is taken, 403 if it is not yours.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"new_short_code\": \"my-new-blog\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Delete short code",
+      "request": {
+        "method": "DELETE",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/v2/urls/delete?short_code=my-new-blog",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "v2",
+            "urls",
+            "delete"
+          ],
+          "query": [
+            {
+              "key": "short_code",
+              "value": "my-new-blog"
+            }
+          ]
+        },
+        "description": "Deletes a short_code you own. Returns 204."
+      },
+      "response": []
+    },
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/health",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "health"
+          ]
+        },
+        "description": "Health check, unversioned. No api-key needed."
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000"
+    },
+    {
+      "key": "apiKey",
+      "value": "your-api-key"
+    }
+  ]
+}
