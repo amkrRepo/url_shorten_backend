@@ -73,7 +73,6 @@ abstract class UrlsController {
   }
 
   @Get('redirect')
-  @HttpCode(HttpStatus.PERMANENT_REDIRECT)
   async redirect(
     @Query('short_code') short_code: string | string[],
     @Query('password') password: string | string[] | undefined,
@@ -81,12 +80,12 @@ abstract class UrlsController {
   ) {
     const code = this.requireShortCode(short_code);
 
-    const url = await this.urlsService.findByShortCode(
+    const originalUrl = await this.urlsService.resolveRedirectUrl(
       code,
       this.optionalPassword(password),
     );
 
-    res.redirect(HttpStatus.FOUND, url.original_url);
+    res.redirect(HttpStatus.FOUND, originalUrl);
   }
 }
 

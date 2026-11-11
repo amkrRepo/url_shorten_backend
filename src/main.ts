@@ -10,6 +10,10 @@ const LEGACY_ROUTE = /^\/(urls|user)(\/|\?|$)/;
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
+  // Runs onModuleDestroy on SIGTERM/SIGINT so UrlsService can flush its
+  // buffered visits before the process exits.
+  app.enableShutdownHooks();
+
   app.use((req: Request, _res: Response, next: NextFunction) => {
     if (LEGACY_ROUTE.test(req.url)) {
       req.url = `api/v1${req.url}`;

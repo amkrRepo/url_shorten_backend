@@ -5,16 +5,30 @@ import {
   GoneException,
   HttpException,
   Injectable,
+  Logger,
   NotFoundException,
+  OnModuleDestroy,
+  OnModuleInit,
 } from '@nestjs/common';
 import { isURL } from 'class-validator';
 import { DbService } from '../../db/db.service';
+import { Prisma } from '../../../generated/prisma/client';
 import type { UrlDetailsDto } from './dto/urls.dto';
 import type { urlsModel } from 'generated/prisma/models/urls';
 import { generateShortCode } from '../../common/short-code-utils';
 import { hashPassword, verifyPassword } from '../../common/password-utils';
 
 const MAX_GENERATION_ATTEMPTS = 5;
+
+// Visit buffer: written to the DB every interval, or sooner once this many
+// distinct short_codes are waiting.
+const VISIT_FLUSH_INTERVAL_MS = 10000;
+const VISIT_FLUSH_MAX_CODES = 500;
+
+interface PendingVisits {
+  count: number;
+  lastAccessedAt: Date;
+}
 
 export interface BatchShortenSuccess extends urlsModel {
   index: number;
@@ -38,8 +52,54 @@ export type PublicUrl = Omit<urlsModel, 'password'> & {
 };
 
 @Injectable()
-export class UrlsService {
+export class UrlsService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(UrlsService.name);
+
+  /**
+   * short_code -> original_url for links already resolved through
+   * `resolveRedirectUrl`, so repeat redirects skip the SELECT. The service
+   * is a singleton, so v1 and v2 share this one cache. Only links with no
+   * password and no expiry are stored, because a hit skips both checks.
+   */
+  private readonly redirectCache = new Map<string, string>();
+
+  /** short_code -> visits not yet written to the DB. */
+  private visitBuffer = new Map<string, PendingVisits>();
+  private flushTimer?: NodeJS.Timeout;
+  private inFlightFlush: Promise<void> | null = null;
+  /**
+   * Set while the DB is rejecting flushes, so a full buffer doesn't fire
+   * a new flush on every visit; the interval keeps retrying instead.
+   */
+  private lastFlushFailed = false;
+
   constructor(private readonly dbService: DbService) {}
+
+  onModuleInit() {
+    this.flushTimer = setInterval(() => {
+      void this.flushVisits();
+    }, VISIT_FLUSH_INTERVAL_MS);
+    // Don't keep the process alive just for the flush timer.
+    this.flushTimer.unref();
+  }
+
+  /**
+   * Graceful shutdown (needs `app.enableShutdownHooks()`). DbModule is
+   * global, so Nest destroys it after this module and the connection is
+   * still open here.
+   */
+  async onModuleDestroy() {
+    clearInterval(this.flushTimer);
+
+    await this.inFlightFlush;
+    await this.flushVisits();
+
+    if (this.visitBuffer.size > 0) {
+      this.logger.error(
+        `Shutting down with ${this.visitBuffer.size} short_code(s) of unflushed visits`,
+      );
+    }
+  }
 
   async getUrlDetails(short_code: string) {
     const urlDetails = await this.dbService.urls.findUnique({
@@ -192,7 +252,9 @@ export class UrlsService {
 
   /**
    * Looks up a live (not soft-deleted) URL by its short_code and records
-   * the visit. Throws NotFoundException (404) when no matching record
+   * the visit in the buffer, so the returned row's visit_count and
+   * last_accessed_at don't include this visit yet. Throws
+   * NotFoundException (404) when no matching record
    * exists or the record has been deleted, and ForbiddenException (403)
    * when the record is password protected and `password` does not match.
    */
@@ -218,17 +280,126 @@ export class UrlsService {
     // counts as a visit.
     await this.assertPasswordMatches(url, password);
 
-    const updatedUrl = await this.dbService.urls.update({
-      where: { id: url.id },
-      data: {
-        visit_count: {
-          increment: 1,
-        },
-        last_accessed_at: new Date(),
-      },
-    });
+    this.recordVisit(short_code);
 
-    return updatedUrl;
+    return url;
+  }
+
+  /**
+   * Returns the original_url to redirect to and records the visit. A
+   * cache hit needs no DB work at all; a miss goes through
+   * `findByShortCode` (existence, expiry and password checks) and caches
+   * the result when the link has no password and no expiry.
+   */
+  async resolveRedirectUrl(
+    short_code: string,
+    password?: string,
+  ): Promise<string> {
+    const cached = this.redirectCache.get(short_code);
+    if (cached) {
+      this.recordVisit(short_code);
+      return cached;
+    }
+
+    const url = await this.findByShortCode(short_code, password);
+
+    if (!url.password && !url.expiry_date) {
+      this.redirectCache.set(short_code, url.original_url);
+    }
+
+    return url.original_url;
+  }
+
+  /**
+   * Counts a visit in memory; no DB work happens here. Visits reach the
+   * DB on the next flush (every VISIT_FLUSH_INTERVAL_MS, or as soon as
+   * VISIT_FLUSH_MAX_CODES distinct short_codes are waiting).
+   */
+  private recordVisit(short_code: string): void {
+    this.addVisits(short_code, 1, new Date());
+
+    if (
+      this.visitBuffer.size >= VISIT_FLUSH_MAX_CODES &&
+      !this.inFlightFlush &&
+      !this.lastFlushFailed
+    ) {
+      void this.flushVisits();
+    }
+  }
+
+  private addVisits(short_code: string, count: number, at: Date): void {
+    const pending = this.visitBuffer.get(short_code);
+
+    if (!pending) {
+      this.visitBuffer.set(short_code, { count, lastAccessedAt: at });
+      return;
+    }
+
+    pending.count += count;
+    if (at > pending.lastAccessedAt) {
+      pending.lastAccessedAt = at;
+    }
+  }
+
+  /**
+   * Writes every buffered visit with a single UPDATE. Concurrent callers
+   * share the flush already running. On failure the batch is merged back
+   * into the buffer, so the next interval retries it along with any visits
+   * recorded in the meantime.
+   */
+  flushVisits(): Promise<void> {
+    if (this.inFlightFlush) {
+      return this.inFlightFlush;
+    }
+    if (this.visitBuffer.size === 0) {
+      return Promise.resolve();
+    }
+
+    // Swap first so visits recorded during the write go into a new buffer.
+    const batch = this.visitBuffer;
+    this.visitBuffer = new Map();
+
+    this.inFlightFlush = this.writeVisits(batch)
+      .then(() => {
+        this.lastFlushFailed = false;
+      })
+      .catch((error: unknown) => {
+        this.lastFlushFailed = true;
+        for (const [code, { count, lastAccessedAt }] of batch) {
+          this.addVisits(code, count, lastAccessedAt);
+        }
+        this.logger.error(
+          `Visit flush failed for ${batch.size} short_code(s); will retry`,
+          error instanceof Error ? error.stack : String(error),
+        );
+      })
+      .finally(() => {
+        this.inFlightFlush = null;
+      });
+
+    return this.inFlightFlush;
+  }
+
+  private async writeVisits(batch: Map<string, PendingVisits>): Promise<void> {
+    // Timestamps go in as UTC ISO strings and are converted to UTC wall
+    // time, matching how Prisma stores this `timestamp` column.
+    const rows = Prisma.join(
+      [...batch].map(
+        ([code, { count, lastAccessedAt }]) =>
+          Prisma.sql`(${code}::varchar, ${count}::int, (${lastAccessedAt.toISOString()}::timestamptz AT TIME ZONE 'UTC'))`,
+      ),
+    );
+
+    // GREATEST ignores NULLs and keeps a retried (older) batch from moving
+    // last_accessed_at backwards.
+    await this.dbService.$executeRaw`
+      UPDATE urls AS u
+      SET visit_count = u.visit_count + v.visits,
+          last_accessed_at = GREATEST(u.last_accessed_at, v.last_accessed_at)
+      FROM (VALUES ${rows}) AS v(short_code, visits, last_accessed_at)
+      WHERE u.short_code = v.short_code
+        AND u.deleted_at IS NULL
+    `;
   }
 
   /**
@@ -294,6 +465,8 @@ export class UrlsService {
       }
       throw error;
     }
+
+    this.redirectCache.delete(short_code);
   }
 
   async updateShortCode({
@@ -353,10 +526,15 @@ export class UrlsService {
     }
 
     try {
-      return await this.dbService.urls.update({
+      const updated = await this.dbService.urls.update({
         where: { id: url.id },
         data,
       });
+
+      // The old code may now be renamed or newly password protected.
+      this.redirectCache.delete(short_code);
+
+      return updated;
     } catch (error) {
       if (this.isUniqueConstraintViolation(error)) {
         throw new ConflictException(
