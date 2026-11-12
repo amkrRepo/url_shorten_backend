@@ -34,6 +34,11 @@ export interface RedirectResolution {
   originalUrl: string;
   /** True when the URL came from the in-memory cache (no DB lookup). */
   cacheHit: boolean;
+  /**
+   * True when the browser may cache the redirect: the link has no password
+   * and no expiry, so a cached copy can't skip a check the server must run.
+   */
+  browserCacheable: boolean;
 }
 
 export interface RedirectCacheStats {
@@ -327,18 +332,24 @@ export class UrlsService implements OnModuleInit, OnModuleDestroy {
       if (cached) {
         this.cacheHits++;
         this.recordVisit(short_code);
-        return { originalUrl: cached, cacheHit: true };
+        // Only password-less, non-expiring links are ever stored.
+        return { originalUrl: cached, cacheHit: true, browserCacheable: true };
       }
     }
 
     this.cacheMisses++;
     const url = await this.findByShortCode(short_code, password);
+    const cacheable = !url.password && !url.expiry_date;
 
-    if (this.redirectCacheEnabled && !url.password && !url.expiry_date) {
+    if (this.redirectCacheEnabled && cacheable) {
       this.redirectCache.set(short_code, url.original_url);
     }
 
-    return { originalUrl: url.original_url, cacheHit: false };
+    return {
+      originalUrl: url.original_url,
+      cacheHit: false,
+      browserCacheable: cacheable,
+    };
   }
 
   getRedirectCacheStats(): RedirectCacheStats {

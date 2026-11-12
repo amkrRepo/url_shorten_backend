@@ -26,6 +26,14 @@ import { APIKeyGuard } from '../../auth/guards/api-key.guard';
 import type { AuthenticatedRequest } from '../../auth/guards/api-key.guard';
 import { TierGuard } from '../../auth/guards/tier.guard';
 
+/**
+ * How long (seconds) a browser may reuse a redirect without asking the
+ * server. Kept short because an updated or deleted link stays stale in the
+ * browser until this expires. Override with BROWSER_CACHE_MAX_AGE_SECONDS.
+ */
+const BROWSER_CACHE_MAX_AGE_SECONDS =
+  Number(process.env.BROWSER_CACHE_MAX_AGE_SECONDS) || 300;
+
 // @Injectable() makes TS emit the constructor's param types; without a
 // decorator here the v1/v2 subclasses get no UrlsService injected.
 @Injectable()
@@ -80,12 +88,22 @@ abstract class UrlsController {
   ) {
     const code = this.requireShortCode(short_code);
 
-    const { originalUrl, cacheHit } = await this.urlsService.resolveRedirectUrl(
-      code,
-      this.optionalPassword(password),
-    );
+    const { originalUrl, cacheHit, browserCacheable } =
+      await this.urlsService.resolveRedirectUrl(
+        code,
+        this.optionalPassword(password),
+      );
 
     res.setHeader('X-Cache', cacheHit ? 'HIT' : 'MISS');
+    // Lets the browser reuse the redirect for repeat visits without hitting
+    // the server. Password-protected or expiring links are never cached, so
+    // their checks always run server-side.
+    res.setHeader(
+      'Cache-Control',
+      browserCacheable
+        ? `private, max-age=${BROWSER_CACHE_MAX_AGE_SECONDS}`
+        : 'no-store',
+    );
     res.redirect(HttpStatus.FOUND, originalUrl);
   }
 
