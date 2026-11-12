@@ -598,4 +598,56 @@ describe('URLs E2E', () => {
 
     expect(response.status).toBe(400);
   });
+
+  describe('redirect cache', () => {
+    const redirect = (shortCode: string, password?: string) => {
+      const query = password
+        ? `short_code=${encodeURIComponent(shortCode)}&password=${encodeURIComponent(password)}`
+        : `short_code=${encodeURIComponent(shortCode)}`;
+      return request(app.getHttpServer()).get(`${V2}/redirect?${query}`);
+    };
+
+    // Edits the row through Prisma, bypassing the service, so the cache is
+    // not cleared. The DB and the cache then hold different URLs, and the
+    // URL a redirect returns shows which of the two answered.
+    const changeOriginalUrlInDb = (shortCode: string, original_url: string) =>
+      prisma.urls.update({
+        where: { short_code: shortCode },
+        data: { original_url },
+      });
+
+    it('serves a repeat redirect from the cache without reading the DB', async () => {
+      const createResponse = await shorten('https://example.com/cached', KEY_A);
+      expect(createResponse.status).toBe(201);
+      const { short_code } = shortenBody(createResponse);
+
+      // First redirect: cache miss, reads the DB and fills the cache.
+      const first = await redirect(short_code);
+      expect(first.status).toBe(302);
+      expect(first.headers['location']).toBe('https://example.com/cached');
+
+      // This is just created to say that the cache returns the stale data.
+      await changeOriginalUrlInDb(short_code, 'https://example.com/changed');
+
+      // Second redirect: still the old URL, so the DB was not consulted.
+      const second = await redirect(short_code);
+      expect(second.status).toBe(302);
+      expect(second.headers['location']).toBe('https://example.com/cached');
+    });
+
+    it('drops a cached link when it is deleted', async () => {
+      const createResponse = await shorten('https://example.com', KEY_A);
+      const { short_code } = shortenBody(createResponse);
+
+      // Fill the cache first, otherwise there is nothing to invalidate.
+      expect((await redirect(short_code)).status).toBe(302);
+
+      const deleteResponse = await request(app.getHttpServer())
+        .delete(`${V2}/delete?short_code=${short_code}`)
+        .set('x-api-key', KEY_A);
+      expect(deleteResponse.status).toBe(204);
+
+      expect((await redirect(short_code)).status).toBe(404);
+    });
+  });
 });
