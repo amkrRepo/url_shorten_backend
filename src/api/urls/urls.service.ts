@@ -30,6 +30,21 @@ interface PendingVisits {
   lastAccessedAt: Date;
 }
 
+export interface RedirectResolution {
+  originalUrl: string;
+  /** True when the URL came from the in-memory cache (no DB lookup). */
+  cacheHit: boolean;
+}
+
+export interface RedirectCacheStats {
+  enabled: boolean;
+  hits: number;
+  misses: number;
+  /** hits / (hits + misses), 0 when there have been no lookups. */
+  hitRatio: number;
+  size: number;
+}
+
 export interface BatchShortenSuccess extends urlsModel {
   index: number;
 }
@@ -62,6 +77,17 @@ export class UrlsService implements OnModuleInit, OnModuleDestroy {
    * password and no expiry are stored, because a hit skips both checks.
    */
   private readonly redirectCache = new Map<string, string>();
+
+  /**
+   * Set REDIRECT_CACHE_ENABLED=false to bypass the redirect cache, e.g. to
+   * benchmark redirects with and without it. Enabled by default.
+   */
+  private readonly redirectCacheEnabled =
+    process.env.REDIRECT_CACHE_ENABLED !== 'false';
+
+  /** Redirect lookups answered from the cache vs. from the DB. */
+  private cacheHits = 0;
+  private cacheMisses = 0;
 
   /** short_code -> visits not yet written to the DB. */
   private visitBuffer = new Map<string, PendingVisits>();
@@ -289,25 +315,51 @@ export class UrlsService implements OnModuleInit, OnModuleDestroy {
    * Returns the original_url to redirect to and records the visit. A
    * cache hit needs no DB work at all; a miss goes through
    * `findByShortCode` (existence, expiry and password checks) and caches
-   * the result when the link has no password and no expiry.
+   * the result when the link has no password and no expiry. With the cache
+   * disabled every call is a miss.
    */
   async resolveRedirectUrl(
     short_code: string,
     password?: string,
-  ): Promise<string> {
-    const cached = this.redirectCache.get(short_code);
-    if (cached) {
-      this.recordVisit(short_code);
-      return cached;
+  ): Promise<RedirectResolution> {
+    if (this.redirectCacheEnabled) {
+      const cached = this.redirectCache.get(short_code);
+      if (cached) {
+        this.cacheHits++;
+        this.recordVisit(short_code);
+        return { originalUrl: cached, cacheHit: true };
+      }
     }
 
+    this.cacheMisses++;
     const url = await this.findByShortCode(short_code, password);
 
-    if (!url.password && !url.expiry_date) {
+    if (this.redirectCacheEnabled && !url.password && !url.expiry_date) {
       this.redirectCache.set(short_code, url.original_url);
     }
 
-    return url.original_url;
+    return { originalUrl: url.original_url, cacheHit: false };
+  }
+
+  getRedirectCacheStats(): RedirectCacheStats {
+    const total = this.cacheHits + this.cacheMisses;
+    return {
+      enabled: this.redirectCacheEnabled,
+      hits: this.cacheHits,
+      misses: this.cacheMisses,
+      hitRatio: total === 0 ? 0 : this.cacheHits / total,
+      size: this.redirectCache.size,
+    };
+  }
+
+  /**
+   * Zeroes the hit/miss counters and empties the cache, so a benchmark
+   * run starts cold: its first redirect is a miss.
+   */
+  resetRedirectCacheStats(): void {
+    this.cacheHits = 0;
+    this.cacheMisses = 0;
+    this.redirectCache.clear();
   }
 
   /**

@@ -24,5 +24,7 @@
     "paths": {
       "generated/*": ["./generated/*"]
     }
-  }
+  },
+  // k6 load tests have their own tsconfig (test/load/tsconfig.json).
+  "exclude": ["node_modules", "dist", "test/load"]
 }

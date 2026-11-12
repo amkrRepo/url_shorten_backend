@@ -20,6 +20,8 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "pretest:e2e": "dotenv -e .env.test -- prisma migrate deploy",
     "test:e2e": "dotenv -e .env.test -- node --experimental-vm-modules node_modules/.bin/jest --config ./test/jest-e2e.json",
+    "start:loadtest": "dotenv -e .env.test -- nest start",
+    "test:load:cache": "dotenv -e .env.test -- k6 run test/load/cache-test.ts",
     "db:seed": "npx tsx prisma/seed.ts"
   },
   "dependencies": {
@@ -47,6 +49,7 @@
     "@types/bcrypt": "^6.0.0",
     "@types/express": "^5.0.0",
     "@types/jest": "^30.0.0",
+    "@types/k6": "^2.3.1",
     "@types/node": "^24.0.0",
     "@types/supertest": "^7.0.0",
     "dotenv": "^17.4.2",

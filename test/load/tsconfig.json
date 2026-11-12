@@ -1,0 +1,14 @@
+{
+  // k6 scripts run inside the k6 binary (ES modules), not Node, so they get
+  // their own config instead of the CommonJS one in the root tsconfig.
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["k6"]
+  },
+  "include": ["*.ts"]
+}

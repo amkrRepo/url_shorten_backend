@@ -80,12 +80,26 @@ abstract class UrlsController {
   ) {
     const code = this.requireShortCode(short_code);
 
-    const originalUrl = await this.urlsService.resolveRedirectUrl(
+    const { originalUrl, cacheHit } = await this.urlsService.resolveRedirectUrl(
       code,
       this.optionalPassword(password),
     );
 
+    res.setHeader('X-Cache', cacheHit ? 'HIT' : 'MISS');
     res.redirect(HttpStatus.FOUND, originalUrl);
+  }
+
+  /** Redirect cache hits, misses and hit ratio since the last reset. */
+  @Get('cache-stats')
+  cacheStats() {
+    return this.urlsService.getRedirectCacheStats();
+  }
+
+  /** Zeroes the counters and empties the cache before a benchmark run. */
+  @Post('cache-stats/reset')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  resetCacheStats() {
+    this.urlsService.resetRedirectCacheStats();
   }
 }
 
