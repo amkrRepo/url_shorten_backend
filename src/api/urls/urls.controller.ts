@@ -26,26 +26,13 @@ import { APIKeyGuard } from '../../auth/guards/api-key.guard';
 import type { AuthenticatedRequest } from '../../auth/guards/api-key.guard';
 import { TierGuard } from '../../auth/guards/tier.guard';
 
-/**
- * How long (seconds) a browser may reuse a redirect without asking the
- * server. Kept short because an updated or deleted link stays stale in the
- * browser until this expires. Override with BROWSER_CACHE_MAX_AGE_SECONDS.
- */
 const BROWSER_CACHE_MAX_AGE_SECONDS =
   Number(process.env.BROWSER_CACHE_MAX_AGE_SECONDS) || 300;
 
-// @Injectable() makes TS emit the constructor's param types; without a
-// decorator here the v1/v2 subclasses get no UrlsService injected.
 @Injectable()
 abstract class UrlsController {
   constructor(readonly urlsService: UrlsService) {}
 
-  /**
-   * `?short_code=a&short_code=b` (or a missing param) makes Express give
-   * an array/undefined instead of a string, which Prisma rejects with a
-   * validation error that would surface as a 500. Normalize it to a
-   * 400 here instead.
-   */
   requireShortCode(short_code: string | string[]): string {
     if (typeof short_code !== 'string' || short_code.length === 0) {
       throw new BadRequestException('short_code query parameter is required');
@@ -54,12 +41,6 @@ abstract class UrlsController {
     return short_code;
   }
 
-  /**
-   * `?password=a&password=b` (or `?password=`) makes Express give an array
-   * or an empty string instead of the single password. Normalize both to
-   * `undefined` so a protected short_code reports 403 instead of being
-   * compared against a malformed value.
-   */
   private optionalPassword(
     password: string | string[] | undefined,
   ): string | undefined {
@@ -95,9 +76,6 @@ abstract class UrlsController {
       );
 
     res.setHeader('X-Cache', cacheHit ? 'HIT' : 'MISS');
-    // Lets the browser reuse the redirect for repeat visits without hitting
-    // the server. Password-protected or expiring links are never cached, so
-    // their checks always run server-side.
     res.setHeader(
       'Cache-Control',
       browserCacheable
@@ -107,17 +85,15 @@ abstract class UrlsController {
     res.redirect(HttpStatus.FOUND, originalUrl);
   }
 
-  /** Redirect cache hits, misses and hit ratio since the last reset. */
   @Get('cache-stats')
-  cacheStats() {
+  async cacheStats() {
     return this.urlsService.getRedirectCacheStats();
   }
 
-  /** Zeroes the counters and empties the cache before a benchmark run. */
   @Post('cache-stats/reset')
   @HttpCode(HttpStatus.NO_CONTENT)
-  resetCacheStats() {
-    this.urlsService.resetRedirectCacheStats();
+  async resetCacheStats() {
+    await this.urlsService.resetRedirectCacheStats();
   }
 }
 

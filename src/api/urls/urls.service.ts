@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { isURL } from 'class-validator';
 import { DbService } from '../../db/db.service';
+import { RedisService } from '../../redis/redis.service';
 import { Prisma } from '../../../generated/prisma/client';
 import type { UrlDetailsDto } from './dto/urls.dto';
 import type { urlsModel } from 'generated/prisma/models/urls';
@@ -20,24 +21,26 @@ import { hashPassword, verifyPassword } from '../../common/password-utils';
 
 const MAX_GENERATION_ATTEMPTS = 5;
 
-// Visit buffer: written to the DB every interval, or sooner once this many
-// distinct short_codes are waiting.
 const VISIT_FLUSH_INTERVAL_MS = 10000;
 const VISIT_FLUSH_MAX_CODES = 500;
+
+const REDIRECT_CACHE_PREFIX = 'redirect:';
+const REDIRECT_CACHE_MAX_TTL_MS =
+  Number(process.env.REDIRECT_CACHE_TTL_SECONDS ?? 86400) * 1000;
 
 interface PendingVisits {
   count: number;
   lastAccessedAt: Date;
 }
 
+interface CachedRedirect {
+  originalUrl: string;
+  browserCacheable: boolean;
+}
+
 export interface RedirectResolution {
   originalUrl: string;
-  /** True when the URL came from the in-memory cache (no DB lookup). */
   cacheHit: boolean;
-  /**
-   * True when the browser may cache the redirect: the link has no password
-   * and no expiry, so a cached copy can't skip a check the server must run.
-   */
   browserCacheable: boolean;
 }
 
@@ -45,7 +48,6 @@ export interface RedirectCacheStats {
   enabled: boolean;
   hits: number;
   misses: number;
-  /** hits / (hits + misses), 0 when there have been no lookups. */
   hitRatio: number;
   size: number;
 }
@@ -75,22 +77,9 @@ export type PublicUrl = Omit<urlsModel, 'password'> & {
 export class UrlsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(UrlsService.name);
 
-  /**
-   * short_code -> original_url for links already resolved through
-   * `resolveRedirectUrl`, so repeat redirects skip the SELECT. The service
-   * is a singleton, so v1 and v2 share this one cache. Only links with no
-   * password and no expiry are stored, because a hit skips both checks.
-   */
-  private readonly redirectCache = new Map<string, string>();
-
-  /**
-   * Set REDIRECT_CACHE_ENABLED=false to bypass the redirect cache, e.g. to
-   * benchmark redirects with and without it. Enabled by default.
-   */
   private readonly redirectCacheEnabled =
     process.env.REDIRECT_CACHE_ENABLED !== 'false';
 
-  /** Redirect lookups answered from the cache vs. from the DB. */
   private cacheHits = 0;
   private cacheMisses = 0;
 
@@ -98,13 +87,12 @@ export class UrlsService implements OnModuleInit, OnModuleDestroy {
   private visitBuffer = new Map<string, PendingVisits>();
   private flushTimer?: NodeJS.Timeout;
   private inFlightFlush: Promise<void> | null = null;
-  /**
-   * Set while the DB is rejecting flushes, so a full buffer doesn't fire
-   * a new flush on every visit; the interval keeps retrying instead.
-   */
   private lastFlushFailed = false;
 
-  constructor(private readonly dbService: DbService) {}
+  constructor(
+    private readonly dbService: DbService,
+    private readonly redis: RedisService,
+  ) {}
 
   onModuleInit() {
     this.flushTimer = setInterval(() => {
@@ -114,11 +102,6 @@ export class UrlsService implements OnModuleInit, OnModuleDestroy {
     this.flushTimer.unref();
   }
 
-  /**
-   * Graceful shutdown (needs `app.enableShutdownHooks()`). DbModule is
-   * global, so Nest destroys it after this module and the connection is
-   * still open here.
-   */
   async onModuleDestroy() {
     clearInterval(this.flushTimer);
 
@@ -148,11 +131,6 @@ export class UrlsService implements OnModuleInit, OnModuleDestroy {
     return urlDetails;
   }
 
-  /**
-   * Lists every live (not soft-deleted) URL owned by `userId`, newest
-   * first. Expired rows are included so the owner can still see and
-   * clean them up.
-   */
   async listUserUrls(userId: number): Promise<PublicUrl[]> {
     const urls = await this.dbService.urls.findMany({
       where: { user_id: userId, deleted_at: null },
@@ -175,8 +153,6 @@ export class UrlsService implements OnModuleInit, OnModuleDestroy {
 
     const expiry_date = dto.expiry_date ? new Date(dto.expiry_date) : null;
 
-    // A user-requested code has no fallback: a collision means the code is
-    // already taken, so it surfaces as 409 instead of being retried.
     if (dto.custom_code) {
       try {
         return await this.dbService.urls.create({
@@ -197,19 +173,9 @@ export class UrlsService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // Every request creates a fresh row with its own short_code, even
-    // when the original_url has been shortened before. The only unique
-    // constraint is short_code, so the only failure worth retrying is a
-    // generated-code collision.
     return this.createGeneratedUrl(dto.original_url, userId, expiry_date);
   }
 
-  /**
-   * Shortens every entry independently so one bad URL never blocks the
-   * rest of the batch. Each entry is pushed onto `successful` (and
-   * persisted) or onto `failed` with the reason, and both lists are
-   * returned so the client can reconcile them by `index`.
-   */
   async createShortUrlsBatch(
     urls: string[],
     userId?: number,
@@ -266,8 +232,6 @@ export class UrlsService implements OnModuleInit, OnModuleDestroy {
           throw error;
         }
 
-        // short_code is the only unique constraint, so this collision is
-        // a duplicate generated code. Loop and try a fresh one.
         lastError = error;
       }
     }
@@ -281,14 +245,6 @@ export class UrlsService implements OnModuleInit, OnModuleDestroy {
       : 'Failed to shorten the URL';
   }
 
-  /**
-   * Looks up a live (not soft-deleted) URL by its short_code and records
-   * the visit in the buffer, so the returned row's visit_count and
-   * last_accessed_at don't include this visit yet. Throws
-   * NotFoundException (404) when no matching record
-   * exists or the record has been deleted, and ForbiddenException (403)
-   * when the record is password protected and `password` does not match.
-   */
   async findByShortCode(
     short_code: string,
     password?: string,
@@ -307,8 +263,6 @@ export class UrlsService implements OnModuleInit, OnModuleDestroy {
       throw new GoneException('This URL has expired');
     }
 
-    // Verified before the visit is recorded so a rejected attempt never
-    // counts as a visit.
     await this.assertPasswordMatches(url, password);
 
     this.recordVisit(short_code);
@@ -316,68 +270,131 @@ export class UrlsService implements OnModuleInit, OnModuleDestroy {
     return url;
   }
 
-  /**
-   * Returns the original_url to redirect to and records the visit. A
-   * cache hit needs no DB work at all; a miss goes through
-   * `findByShortCode` (existence, expiry and password checks) and caches
-   * the result when the link has no password and no expiry. With the cache
-   * disabled every call is a miss.
-   */
   async resolveRedirectUrl(
     short_code: string,
     password?: string,
   ): Promise<RedirectResolution> {
     if (this.redirectCacheEnabled) {
-      const cached = this.redirectCache.get(short_code);
+      const cached = await this.readCachedRedirect(short_code);
       if (cached) {
         this.cacheHits++;
         this.recordVisit(short_code);
-        // Only password-less, non-expiring links are ever stored.
-        return { originalUrl: cached, cacheHit: true, browserCacheable: true };
+        return { ...cached, cacheHit: true };
       }
     }
 
     this.cacheMisses++;
     const url = await this.findByShortCode(short_code, password);
-    const cacheable = !url.password && !url.expiry_date;
 
-    if (this.redirectCacheEnabled && cacheable) {
-      this.redirectCache.set(short_code, url.original_url);
+    const browserCacheable = !url.password && !url.expiry_date;
+
+    if (this.redirectCacheEnabled && !url.password) {
+      await this.writeCachedRedirect(
+        short_code,
+        { originalUrl: url.original_url, browserCacheable },
+        url.expiry_date,
+      );
     }
 
     return {
       originalUrl: url.original_url,
       cacheHit: false,
-      browserCacheable: cacheable,
+      browserCacheable,
     };
   }
 
-  getRedirectCacheStats(): RedirectCacheStats {
+  async getRedirectCacheStats(): Promise<RedirectCacheStats> {
     const total = this.cacheHits + this.cacheMisses;
     return {
       enabled: this.redirectCacheEnabled,
       hits: this.cacheHits,
       misses: this.cacheMisses,
       hitRatio: total === 0 ? 0 : this.cacheHits / total,
-      size: this.redirectCache.size,
+      size: (await this.scanRedirectCacheKeys()).length,
     };
   }
 
-  /**
-   * Zeroes the hit/miss counters and empties the cache, so a benchmark
-   * run starts cold: its first redirect is a miss.
-   */
-  resetRedirectCacheStats(): void {
+  async resetRedirectCacheStats(): Promise<void> {
     this.cacheHits = 0;
     this.cacheMisses = 0;
-    this.redirectCache.clear();
+
+    const keys = await this.scanRedirectCacheKeys();
+    if (keys.length > 0) {
+      await this.redis.unlink(...keys);
+    }
   }
 
-  /**
-   * Counts a visit in memory; no DB work happens here. Visits reach the
-   * DB on the next flush (every VISIT_FLUSH_INTERVAL_MS, or as soon as
-   * VISIT_FLUSH_MAX_CODES distinct short_codes are waiting).
-   */
+  private async readCachedRedirect(
+    short_code: string,
+  ): Promise<CachedRedirect | null> {
+    try {
+      const raw = await this.redis.get(REDIRECT_CACHE_PREFIX + short_code);
+      return raw ? (JSON.parse(raw) as CachedRedirect) : null;
+    } catch (error) {
+      this.logger.warn(
+        `Redirect cache read failed for "${short_code}": ${this.errorMessage(error)}`,
+      );
+      return null;
+    }
+  }
+
+  private async writeCachedRedirect(
+    short_code: string,
+    entry: CachedRedirect,
+    expiry_date: Date | string | null,
+  ): Promise<void> {
+    const expiresAt = this.expiresAt(expiry_date);
+    const ttlMs = Math.min(
+      REDIRECT_CACHE_MAX_TTL_MS,
+      expiresAt === null ? Infinity : expiresAt.getTime() - Date.now(),
+    );
+
+    if (ttlMs <= 0) {
+      return;
+    }
+
+    try {
+      await this.redis.set(
+        REDIRECT_CACHE_PREFIX + short_code,
+        JSON.stringify(entry),
+        'PX',
+        ttlMs,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Redirect cache write failed for "${short_code}": ${this.errorMessage(error)}`,
+      );
+    }
+  }
+
+  private async invalidateCachedRedirect(short_code: string): Promise<void> {
+    try {
+      await this.redis.del(REDIRECT_CACHE_PREFIX + short_code);
+    } catch (error) {
+      this.logger.error(
+        `Could not invalidate cached redirect for "${short_code}"; it may be served until its TTL ends`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
+  private async scanRedirectCacheKeys(): Promise<string[]> {
+    const keys: string[] = [];
+    let cursor = '0';
+    do {
+      const [next, batch] = await this.redis.scan(
+        cursor,
+        'MATCH',
+        `${REDIRECT_CACHE_PREFIX}*`,
+        'COUNT',
+        1000,
+      );
+      keys.push(...batch);
+      cursor = next;
+    } while (cursor !== '0');
+    return keys;
+  }
+
   private recordVisit(short_code: string): void {
     this.addVisits(short_code, 1, new Date());
 
@@ -404,12 +421,6 @@ export class UrlsService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /**
-   * Writes every buffered visit with a single UPDATE. Concurrent callers
-   * share the flush already running. On failure the batch is merged back
-   * into the buffer, so the next interval retries it along with any visits
-   * recorded in the meantime.
-   */
   flushVisits(): Promise<void> {
     if (this.inFlightFlush) {
       return this.inFlightFlush;
@@ -418,7 +429,6 @@ export class UrlsService implements OnModuleInit, OnModuleDestroy {
       return Promise.resolve();
     }
 
-    // Swap first so visits recorded during the write go into a new buffer.
     const batch = this.visitBuffer;
     this.visitBuffer = new Map();
 
@@ -444,8 +454,6 @@ export class UrlsService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async writeVisits(batch: Map<string, PendingVisits>): Promise<void> {
-    // Timestamps go in as UTC ISO strings and are converted to UTC wall
-    // time, matching how Prisma stores this `timestamp` column.
     const rows = Prisma.join(
       [...batch].map(
         ([code, { count, lastAccessedAt }]) =>
@@ -453,8 +461,6 @@ export class UrlsService implements OnModuleInit, OnModuleDestroy {
       ),
     );
 
-    // GREATEST ignores NULLs and keeps a retried (older) batch from moving
-    // last_accessed_at backwards.
     await this.dbService.$executeRaw`
       UPDATE urls AS u
       SET visit_count = u.visit_count + v.visits,
@@ -465,11 +471,6 @@ export class UrlsService implements OnModuleInit, OnModuleDestroy {
     `;
   }
 
-  /**
-   * Rejects access to a password-protected short_code when no password is
-   * supplied or when it does not match the stored hash. Rows without a
-   * password are always allowed.
-   */
   private async assertPasswordMatches(
     url: Pick<urlsModel, 'short_code' | 'password'>,
     password?: string,
@@ -529,7 +530,7 @@ export class UrlsService implements OnModuleInit, OnModuleDestroy {
       throw error;
     }
 
-    this.redirectCache.delete(short_code);
+    await this.invalidateCachedRedirect(short_code);
   }
 
   async updateShortCode({
@@ -595,7 +596,7 @@ export class UrlsService implements OnModuleInit, OnModuleDestroy {
       });
 
       // The old code may now be renamed or newly password protected.
-      this.redirectCache.delete(short_code);
+      await this.invalidateCachedRedirect(short_code);
 
       return updated;
     } catch (error) {
@@ -613,32 +614,34 @@ export class UrlsService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /**
-   * expiry_date is a DATE column, so the URL stays valid through the
-   * whole expiry day and only expires once that day is over (local time).
-   */
   private isExpired(expiry_date?: Date | string | null): boolean {
+    const expiresAt = this.expiresAt(expiry_date);
+    return expiresAt !== null && Date.now() >= expiresAt.getTime();
+  }
+
+  private expiresAt(expiry_date?: Date | string | null): Date | null {
     if (!expiry_date) {
-      return false;
+      return null;
     }
 
     const expiry =
       typeof expiry_date === 'string' ? new Date(expiry_date) : expiry_date;
 
     if (Number.isNaN(expiry.getTime())) {
-      return false;
+      return null;
     }
 
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
+    const endOfExpiryDay = new Date(expiry);
+    endOfExpiryDay.setHours(0, 0, 0, 0);
+    endOfExpiryDay.setDate(endOfExpiryDay.getDate() + 1);
+    return endOfExpiryDay;
+  }
 
-    return expiry < startOfToday;
+  private errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 
   private isUniqueConstraintViolation(error: unknown): boolean {
-    // Prisma throws PrismaClientKnownRequestError with code 'P2002'
-    // for unique constraint violations. Checked structurally here to
-    // avoid importing Prisma's runtime error classes directly.
     return (
       typeof error === 'object' &&
       error !== null &&
@@ -648,8 +651,6 @@ export class UrlsService implements OnModuleInit, OnModuleDestroy {
   }
 
   private isRecordNotFoundError(error: unknown): boolean {
-    // Prisma throws PrismaClientKnownRequestError with code 'P2025'
-    // when delete()/update() targets a record that doesn't exist.
     return (
       typeof error === 'object' &&
       error !== null &&

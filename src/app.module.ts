@@ -10,6 +10,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { UrlsModule } from './api/urls/urls.module';
 import { DbModule } from './db/db.module';
+import { RedisModule } from './redis/redis.module';
 import { UserModule } from './api/user/user.module';
 import { HealthModule } from './health/health.module';
 import { RequestLoggerMiddleware } from './common/request-logger.middleware';
@@ -24,6 +25,7 @@ import { UrlsV1Controller, UrlsV2Controller } from './api/urls/urls.controller';
     SentryModule.forRoot(),
     UrlsModule,
     DbModule,
+    RedisModule,
     UserModule,
     HealthModule,
   ],

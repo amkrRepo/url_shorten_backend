@@ -607,9 +607,6 @@ describe('URLs E2E', () => {
       return request(app.getHttpServer()).get(`${V2}/redirect?${query}`);
     };
 
-    // Edits the row through Prisma, bypassing the service, so the cache is
-    // not cleared. The DB and the cache then hold different URLs, and the
-    // URL a redirect returns shows which of the two answered.
     const changeOriginalUrlInDb = (shortCode: string, original_url: string) =>
       prisma.urls.update({
         where: { short_code: shortCode },
