@@ -18,6 +18,12 @@ import { BlacklistService } from './common/blacklist.service';
 import { BlacklistMiddleware } from './common/blacklist.middleware';
 import { ResponseTimeMiddleware } from './common/response-time.middleware';
 import { ObservabilityMiddleware } from './common/observability.middleware';
+import { RateLimitMiddleware } from './common/rate-limit.middleware';
+import {
+  RATE_LIMIT_OPTIONS,
+  RateLimitService,
+  rateLimitOptionsFromEnv,
+} from './common/rate-limit.service';
 import { UrlsV1Controller, UrlsV2Controller } from './api/urls/urls.controller';
 
 @Module({
@@ -34,12 +40,21 @@ import { UrlsV1Controller, UrlsV2Controller } from './api/urls/urls.controller';
     { provide: APP_FILTER, useClass: SentryGlobalFilter },
     AppService,
     BlacklistService,
+    { provide: RATE_LIMIT_OPTIONS, useFactory: rateLimitOptionsFromEnv },
+    RateLimitService,
   ],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
     // Blocked keys are rejected first, before any other API key handling.
     consumer.apply(BlacklistMiddleware).forRoutes('*');
+
+    // Per-IP request limit (default 100/min). Health checks are exempt so
+    // monitors never get throttled.
+    consumer
+      .apply(RateLimitMiddleware)
+      .exclude({ path: 'health', method: RequestMethod.GET })
+      .forRoutes('*');
 
     consumer
       .apply(RequestLoggerMiddleware)
